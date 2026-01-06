@@ -1,0 +1,66 @@
+# VMR Specification
+
+## File Format
+
+0x00 - 0x03 Magic Number: 0x56 0x4D 0x52
+0x03 ... Code
+After the code, any data.
+
+## Instruction Format
+
+TODO: 
+
+I'm thinking, before the OP code, encode what arguments it will need. 4 bits arguments, 4 bits opcode, the opcode can be reused, same opcode for mov_r_imm and mov_r_r
+
+Pipe (|) means byte boundary
+
+Perhaps: 
+```
+1 byte Argument Definition | 1 byte OPCODE
+         then nothing
+         or REG
+         or REG | REG 
+         or REG | 2 bytes Immediate
+         or 2 bytes Immediate | REG
+```
+
+### Argument Definition
+
+IMM is always 2 bytes 
+
+```
+- 0x0 -> No argument, next byte start of instruction
+- 0x1 -> REG
+- 0x2 -> REG | REG
+- 0x3 -> REG | IMM
+- 0x4 -> IMM | REG
+```
+
+### Register Format
+
+Addressed by one byte.
+
+- 0x00 to 0x0F -> 2 byte registers
+- 0x10 -> RSP (Points to the top of the stack)
+
+### Function Specification
+
+- Return register: R0
+
+- Input Registers: R1, R2, R3, R4. For > 5, the stack is used
+
+- General Registers: R5, R6, R6, R8, R9.
+
+- Untouched Registers: R10, R11, R12, R13, R14, R15.
+
+## Virtual Machine
+
+Registers R0 - R15 contain 2 bytes each. 
+
+Pointers are 2 bytes
+
+Two memory strips:
+
+0x0000 - 0xFFFF Code (when addressed by jumps)
+
+0x0000 - 0xFFFF Memory (when addressed by load, store, etc. ) 
