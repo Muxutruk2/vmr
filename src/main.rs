@@ -629,12 +629,71 @@ impl<'a> VirtualMachine<'a> {
                 }
                 None
             }
-            Operation::PUSH => todo!(),
-            Operation::PUSH_M => todo!(),
-            Operation::PUSH_IMM => todo!(),
-            Operation::POP => todo!(),
-            Operation::POP_M => todo!(),
-            Operation::POP_IMM => todo!(),
+            Operation::PUSH => {
+                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
+                    .ok_or(RuntimeError::InvalidRegister)?;
+
+                self.registers[Register::RSP as usize] -= 1;
+                self.memory[self.registers[Register::RSP as usize] as usize] =
+                    self.registers[r1 as usize];
+
+                None
+            }
+            Operation::PUSH_M => {
+                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
+                    .ok_or(RuntimeError::InvalidRegister)?;
+
+                self.registers[Register::RSP as usize] -= 1;
+                self.memory[self.registers[Register::RSP as usize] as usize] =
+                    self.memory[self.registers[r1 as usize] as usize];
+
+                None
+            }
+            Operation::PUSH_IMM => {
+                let val_imm = u16::from_be_bytes(
+                    self.code[(self.current_instruction + 1) as usize
+                        ..(self.current_instruction + 3) as usize]
+                        .try_into()
+                        .unwrap(),
+                );
+                self.registers[Register::RSP as usize] -= 1;
+                self.memory[self.registers[Register::RSP as usize] as usize] = val_imm;
+                None
+            }
+            Operation::POP => {
+                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
+                    .ok_or(RuntimeError::InvalidRegister)?;
+
+                self.registers[r1 as usize] =
+                    self.memory[self.registers[Register::RSP as usize] as usize];
+                self.registers[Register::RSP as usize] += 1;
+
+                None
+            }
+            Operation::POP_M => {
+                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
+                    .ok_or(RuntimeError::InvalidRegister)?;
+
+                self.memory[self.registers[r1 as usize] as usize] =
+                    self.memory[self.registers[Register::RSP as usize] as usize];
+                self.registers[Register::RSP as usize] += 1;
+
+                None
+            }
+            Operation::POP_IMM => {
+                let addr_imm = u16::from_be_bytes(
+                    self.code[(self.current_instruction + 1) as usize
+                        ..(self.current_instruction + 3) as usize]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+
+                self.memory[addr_imm] =
+                    self.memory[self.registers[Register::RSP as usize] as usize];
+                self.registers[Register::RSP as usize] += 1;
+
+                None
+            }
             Operation::JMP => {
                 let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
                     .ok_or(RuntimeError::InvalidRegister)?;
