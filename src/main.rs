@@ -1,7 +1,7 @@
 use std::{path::Path, usize};
 #[macro_use]
 extern crate num_derive;
-use num_traits::FromPrimitive;
+use num_traits::{FromBytes, FromPrimitive};
 
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
@@ -253,11 +253,44 @@ pub enum RuntimeError {
     MemoryOOB,
     InvalidOPCode,
     InvalidRegister,
+    InvalidCode,
     OffsetOOB,
     Halted,
 }
 
 impl<'a> VirtualMachine<'a> {
+    fn next_reg(&self, offset: u16) -> Result<usize, RuntimeError> {
+        let code_idx = (self.current_instruction + offset) as usize;
+        if code_idx >= self.code.len() {
+            return Err(RuntimeError::InstructionOOB);
+        }
+        let reg_byte = self.code[code_idx];
+        Ok(Register::from_u8(reg_byte).ok_or(RuntimeError::InvalidRegister)? as usize)
+    }
+
+    fn next_u16(&self, offset: u16) -> Result<u16, RuntimeError> {
+        let idx = (self.current_instruction + offset) as usize;
+        let bytes = self
+            .code
+            .get(idx..idx + 2)
+            .ok_or(RuntimeError::InstructionOOB)?;
+        Ok(u16::from_be_bytes(bytes.try_into().unwrap()))
+    }
+    fn next<T>(&self, offset: u16) -> Result<T, RuntimeError>
+    where
+        T: FromBytes,
+        for<'b> &'b [u8]: TryInto<&'b T::Bytes>,
+    {
+        let idx = (self.current_instruction + offset) as usize;
+        let bytes = self
+            .code
+            .get(idx..idx + size_of::<T>())
+            .ok_or(RuntimeError::InstructionOOB)?
+            .try_into()
+            .map_err(|_| RuntimeError::InvalidCode)?;
+        Ok(T::from_be_bytes(bytes))
+    }
+
     pub fn cycle(&mut self) -> Result<(), RuntimeError> {
         let pc = self.current_instruction as usize;
 
@@ -279,18 +312,16 @@ impl<'a> VirtualMachine<'a> {
             Operation::HALT => return Err(RuntimeError::Halted),
             Operation::NOP => None,
             Operation::MOV => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+                let r2 = self.next_reg(2)?;
 
                 // 1 <- 2
                 self.registers[r1 as usize] = self.registers[r2 as usize];
                 None
             }
             Operation::MOV_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 3) as usize]
@@ -301,10 +332,9 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::LOAD => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 let address = self.registers[r2 as usize] as usize;
                 self.registers[r1 as usize] = self.memory[address];
@@ -312,8 +342,7 @@ impl<'a> VirtualMachine<'a> {
             }
 
             Operation::LOAD_REL => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 let offset = i16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
@@ -322,8 +351,7 @@ impl<'a> VirtualMachine<'a> {
                         .unwrap(),
                 );
 
-                let r3 = Register::from_u8(self.code[(self.current_instruction + 4) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r3 = self.next_reg(4)?;
 
                 let base_addr = self.registers[r1 as usize] as i32;
                 let final_addr = base_addr
@@ -342,34 +370,25 @@ impl<'a> VirtualMachine<'a> {
                         .unwrap(),
                 );
 
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 3) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r2 as usize] = self.memory[addr_imm as usize];
                 None
             }
             Operation::STORE_R_R => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.memory[self.registers[r1 as usize] as usize] = self.registers[r2 as usize];
                 None
             }
             Operation::STORE_REL_R => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
-                let offset = i16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 4) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let offset: i16 = self.next(2)?;
 
-                let r3 = Register::from_u8(self.code[(self.current_instruction + 4) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r3 = self.next_reg(4)?;
 
                 let base_addr = self.registers[r1 as usize] as i32;
                 let final_addr = base_addr
@@ -387,15 +406,14 @@ impl<'a> VirtualMachine<'a> {
                         .unwrap(),
                 );
 
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 3) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r2 = self.next_reg(2)?;
 
                 self.memory[addr_imm as usize] = self.registers[r2 as usize];
                 None
             }
             Operation::STORE_R_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm_value = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 4) as usize]
@@ -406,8 +424,7 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::STORE_REL_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 let offset = i16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
@@ -448,18 +465,17 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::ADD => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r1 as usize] =
                     self.registers[r1 as usize].wrapping_add(self.registers[r2 as usize]);
                 None
             }
             Operation::ADD_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 4) as usize]
@@ -471,18 +487,17 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::SUB => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r1 as usize] =
                     self.registers[r1 as usize].wrapping_sub(self.registers[r2 as usize]);
                 None
             }
             Operation::SUB_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 3) as usize]
@@ -494,17 +509,16 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::AND => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r1 as usize] &= self.registers[r2 as usize];
                 None
             }
             Operation::AND_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 3) as usize]
@@ -515,17 +529,16 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::OR => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r1 as usize] |= self.registers[r2 as usize];
                 None
             }
             Operation::OR_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 3) as usize]
@@ -536,17 +549,16 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::XOR => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r1 as usize] ^= self.registers[r2 as usize];
                 None
             }
             Operation::XOR_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 3) as usize]
@@ -557,18 +569,17 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::SHL => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r1 as usize] =
                     self.registers[r1 as usize] << self.registers[r2 as usize];
                 None
             }
             Operation::SHL_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 4) as usize]
@@ -579,18 +590,17 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::SHR => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
 
                 self.registers[r1 as usize] =
                     self.registers[r1 as usize] >> self.registers[r2 as usize];
                 None
             }
             Operation::SHR_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 3) as usize]
@@ -601,10 +611,10 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::CMP => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
-                let r2 = Register::from_u8(self.code[(self.current_instruction + 2) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
+                let r2 = self.next_reg(2)?;
+
                 if self.registers[r1 as usize] == self.registers[r2 as usize] {
                     self.equal = true;
                 } else {
@@ -613,8 +623,8 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::CMP_IMM => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 let imm2 = u16::from_be_bytes(
                     self.code[(self.current_instruction + 2) as usize
                         ..(self.current_instruction + 4) as usize]
@@ -630,8 +640,7 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::PUSH => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 self.registers[Register::RSP as usize] -= 1;
                 self.memory[self.registers[Register::RSP as usize] as usize] =
@@ -640,8 +649,7 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::PUSH_M => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 self.registers[Register::RSP as usize] -= 1;
                 self.memory[self.registers[Register::RSP as usize] as usize] =
@@ -661,8 +669,7 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::POP => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 self.registers[r1 as usize] =
                     self.memory[self.registers[Register::RSP as usize] as usize];
@@ -671,8 +678,7 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::POP_M => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 self.memory[self.registers[r1 as usize] as usize] =
                     self.memory[self.registers[Register::RSP as usize] as usize];
@@ -695,8 +701,8 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::JMP => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
+
                 Some(self.registers[r1 as usize])
             }
             Operation::JMP_IMM => {
@@ -709,8 +715,7 @@ impl<'a> VirtualMachine<'a> {
                 Some(addr_imm)
             }
             Operation::JE => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 if self.equal {
                     Some(self.registers[r1 as usize])
@@ -728,8 +733,7 @@ impl<'a> VirtualMachine<'a> {
                 if self.equal { Some(addr_imm) } else { None }
             }
             Operation::JNE => {
-                let r1 = Register::from_u8(self.code[(self.current_instruction + 1) as usize])
-                    .ok_or(RuntimeError::InvalidRegister)?;
+                let r1 = self.next_reg(1)?;
 
                 if !self.equal {
                     Some(self.registers[r1 as usize])
