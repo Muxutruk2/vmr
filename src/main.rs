@@ -1,7 +1,9 @@
-use std::{path::Path, usize};
+use std::{fmt::Display, path::Path, usize};
 #[macro_use]
 extern crate num_derive;
-use num_traits::{FromBytes, FromPrimitive};
+use bytemuck::Pod;
+use log::{debug, error};
+use num_traits::FromPrimitive;
 
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
@@ -106,6 +108,12 @@ enum Operation {
     CALL = 0xD0,     // R
     CALL_IMM = 0xD1, // IMM
     RET = 0xD2,      // ()
+}
+
+impl Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl Operation {
@@ -219,14 +227,14 @@ impl<'a> std::fmt::Display for VirtualMachine<'a> {
         match last_index {
             Some(index) => {
                 for byte in self.memory[0..index].iter() {
-                    write!(f, "{byte:02x} ")?;
+                    write!(f, "{byte:04x} ")?;
                 }
             }
             None => write!(f, "<EMPTY> ")?,
         }
         write!(
             f,
-            "\nInstruction Address: {:02x}\n",
+            "\nInstruction Address: {:04x}\n",
             self.current_instruction
         )?;
         write!(
@@ -236,7 +244,7 @@ impl<'a> std::fmt::Display for VirtualMachine<'a> {
         )?;
         write!(f, "Registers\n")?;
         for reg in self.registers.iter() {
-            write!(f, "{:02x} ", reg)?;
+            write!(f, "{:04x} ", reg)?;
         }
         if self.equal {
             write!(f, "Equal: Set\n")?;
@@ -247,48 +255,39 @@ impl<'a> std::fmt::Display for VirtualMachine<'a> {
         Ok(())
     }
 }
-
+#[derive(Debug)]
 pub enum RuntimeError {
     InstructionOOB,
     MemoryOOB,
-    InvalidOPCode,
+    InvalidOPCode(u8),
     InvalidRegister,
     InvalidCode,
     OffsetOOB,
     Halted,
+    StackOverflow,
 }
 
 impl<'a> VirtualMachine<'a> {
     fn next_reg(&self, offset: u16) -> Result<usize, RuntimeError> {
-        let code_idx = (self.current_instruction + offset) as usize;
-        if code_idx >= self.code.len() {
-            return Err(RuntimeError::InstructionOOB);
-        }
-        let reg_byte = self.code[code_idx];
+        let reg_byte = self.next(offset)?;
         Ok(Register::from_u8(reg_byte).ok_or(RuntimeError::InvalidRegister)? as usize)
     }
 
-    fn next_u16(&self, offset: u16) -> Result<u16, RuntimeError> {
-        let idx = (self.current_instruction + offset) as usize;
-        let bytes = self
-            .code
-            .get(idx..idx + 2)
+    fn next<T: Pod>(&self, offset: u16) -> Result<T, RuntimeError> {
+        let start_idx = (self.current_instruction as usize)
+            .checked_add(offset as usize)
             .ok_or(RuntimeError::InstructionOOB)?;
-        Ok(u16::from_be_bytes(bytes.try_into().unwrap()))
-    }
-    fn next<T>(&self, offset: u16) -> Result<T, RuntimeError>
-    where
-        T: FromBytes,
-        for<'b> &'b [u8]: TryInto<&'b T::Bytes>,
-    {
-        let idx = (self.current_instruction + offset) as usize;
+
+        let end_idx = start_idx
+            .checked_add(size_of::<T>())
+            .ok_or(RuntimeError::InstructionOOB)?;
+
         let bytes = self
             .code
-            .get(idx..idx + size_of::<T>())
-            .ok_or(RuntimeError::InstructionOOB)?
-            .try_into()
-            .map_err(|_| RuntimeError::InvalidCode)?;
-        Ok(T::from_be_bytes(bytes))
+            .get(start_idx..end_idx)
+            .ok_or(RuntimeError::InstructionOOB)?;
+
+        Ok(bytemuck::pod_read_unaligned(bytes))
     }
 
     pub fn cycle(&mut self) -> Result<(), RuntimeError> {
@@ -301,12 +300,17 @@ impl<'a> VirtualMachine<'a> {
         let op_code = self.code[pc];
         let op = match Operation::from_u8(op_code) {
             Some(o) => Ok(o),
-            None => Err(RuntimeError::InvalidOPCode),
+            None => Err(RuntimeError::InvalidOPCode(op_code)),
         }?;
         let arg_type = op.arg_type();
 
-        // 2. Logging
-        println!("PC: {}, Op: {:?}, Args: {:?}", pc, op, arg_type);
+        let end = std::cmp::min(pc + 5, self.code.len());
+        debug!(
+            "PC: {pc:02x} | Op: {:-13} | Args: {:-20} | Next 6 bytes {:02x?}",
+            format!("{:?}", op),
+            format!("{:?}", arg_type),
+            &self.code[pc..end]
+        );
 
         let new_addr: Option<u16> = match op {
             Operation::HALT => return Err(RuntimeError::Halted),
@@ -316,28 +320,22 @@ impl<'a> VirtualMachine<'a> {
                 let r2 = self.next_reg(2)?;
 
                 // 1 <- 2
-                self.registers[r1 as usize] = self.registers[r2 as usize];
+                self.registers[r1] = self.registers[r2];
                 None
             }
             Operation::MOV_IMM => {
                 let r1 = self.next_reg(1)?;
+                let imm2: u16 = self.next(2)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                self.registers[r1 as usize] = imm2;
+                self.registers[r1] = imm2;
                 None
             }
             Operation::LOAD => {
                 let r1 = self.next_reg(1)?;
-
                 let r2 = self.next_reg(2)?;
 
-                let address = self.registers[r2 as usize] as usize;
-                self.registers[r1 as usize] = self.memory[address];
+                let address = self.registers[r2] as usize;
+                self.registers[r1] = self.memory[address];
                 None
             }
 
@@ -353,7 +351,7 @@ impl<'a> VirtualMachine<'a> {
 
                 let r3 = self.next_reg(4)?;
 
-                let base_addr = self.registers[r1 as usize] as i32;
+                let base_addr = self.registers[r1] as i32;
                 let final_addr = base_addr
                     .checked_add(offset as i32)
                     .ok_or(RuntimeError::OffsetOOB)?;
@@ -363,24 +361,18 @@ impl<'a> VirtualMachine<'a> {
             }
 
             Operation::LOAD_IMM => {
-                let addr_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let addr_imm: u16 = self.next(1)?;
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r2 as usize] = self.memory[addr_imm as usize];
+                self.registers[r2] = self.memory[addr_imm as usize];
                 None
             }
             Operation::STORE_R_R => {
                 let r1 = self.next_reg(1)?;
-
                 let r2 = self.next_reg(2)?;
 
-                self.memory[self.registers[r1 as usize] as usize] = self.registers[r2 as usize];
+                self.memory[self.registers[r1] as usize] = self.registers[r2];
                 None
             }
             Operation::STORE_REL_R => {
@@ -390,7 +382,7 @@ impl<'a> VirtualMachine<'a> {
 
                 let r3 = self.next_reg(4)?;
 
-                let base_addr = self.registers[r1 as usize] as i32;
+                let base_addr = self.registers[r1] as i32;
                 let final_addr = base_addr
                     .checked_add(offset as i32)
                     .ok_or(RuntimeError::OffsetOOB)?;
@@ -399,16 +391,11 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::STORE_IMM_R => {
-                let addr_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let addr_imm: u16 = self.next(1)?;
 
                 let r2 = self.next_reg(2)?;
 
-                self.memory[addr_imm as usize] = self.registers[r2 as usize];
+                self.memory[addr_imm as usize] = self.registers[r2];
                 None
             }
             Operation::STORE_R_IMM => {
@@ -420,7 +407,7 @@ impl<'a> VirtualMachine<'a> {
                         .try_into()
                         .unwrap(),
                 );
-                self.memory[self.registers[r1 as usize] as usize] = imm_value;
+                self.memory[self.registers[r1] as usize] = imm_value;
                 None
             }
             Operation::STORE_REL_IMM => {
@@ -439,7 +426,7 @@ impl<'a> VirtualMachine<'a> {
                         .unwrap(),
                 );
 
-                let base_addr = self.registers[r1 as usize] as i32;
+                let base_addr = self.registers[r1] as i32;
                 let final_addr = base_addr
                     .checked_add(offset as i32)
                     .ok_or(RuntimeError::OffsetOOB)? as usize;
@@ -448,18 +435,8 @@ impl<'a> VirtualMachine<'a> {
                 None
             }
             Operation::STORE_IMM_IMM => {
-                let addr_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                let value_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 4) as usize
-                        ..(self.current_instruction + 6) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let addr_imm: u16 = self.next(1)?;
+                let value_imm = self.next(3)?;
 
                 self.memory[addr_imm as usize] = value_imm;
                 None
@@ -469,21 +446,15 @@ impl<'a> VirtualMachine<'a> {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1 as usize] =
-                    self.registers[r1 as usize].wrapping_add(self.registers[r2 as usize]);
+                self.registers[r1] = self.registers[r1].wrapping_add(self.registers[r2]);
                 None
             }
             Operation::ADD_IMM => {
                 let r1 = self.next_reg(1)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 4) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let imm2: u16 = self.next(2)?;
 
-                self.registers[r1 as usize] = self.registers[r1 as usize].wrapping_add(imm2);
+                self.registers[r1] = self.registers[r1].wrapping_add(imm2);
                 None
             }
             Operation::SUB => {
@@ -491,21 +462,15 @@ impl<'a> VirtualMachine<'a> {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1 as usize] =
-                    self.registers[r1 as usize].wrapping_sub(self.registers[r2 as usize]);
+                self.registers[r1] = self.registers[r1].wrapping_sub(self.registers[r2]);
                 None
             }
             Operation::SUB_IMM => {
                 let r1 = self.next_reg(1)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let imm2: u16 = self.next(2)?;
 
-                self.registers[r1 as usize] = self.registers[r1 as usize].wrapping_sub(imm2);
+                self.registers[r1] = self.registers[r1].wrapping_sub(imm2);
                 None
             }
             Operation::AND => {
@@ -513,19 +478,14 @@ impl<'a> VirtualMachine<'a> {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1 as usize] &= self.registers[r2 as usize];
+                self.registers[r1] &= self.registers[r2];
                 None
             }
             Operation::AND_IMM => {
                 let r1 = self.next_reg(1)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                self.registers[r1 as usize] &= imm2;
+                let imm2: u16 = self.next(2)?;
+                self.registers[r1] &= imm2;
                 None
             }
             Operation::OR => {
@@ -533,19 +493,14 @@ impl<'a> VirtualMachine<'a> {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1 as usize] |= self.registers[r2 as usize];
+                self.registers[r1] |= self.registers[r2];
                 None
             }
             Operation::OR_IMM => {
                 let r1 = self.next_reg(1)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                self.registers[r1 as usize] |= imm2;
+                let imm2: u16 = self.next(2)?;
+                self.registers[r1] |= imm2;
                 None
             }
             Operation::XOR => {
@@ -553,69 +508,49 @@ impl<'a> VirtualMachine<'a> {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1 as usize] ^= self.registers[r2 as usize];
+                self.registers[r1] ^= self.registers[r2];
                 None
             }
             Operation::XOR_IMM => {
                 let r1 = self.next_reg(1)?;
+                let imm2: u16 = self.next(2)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                self.registers[r1 as usize] ^= imm2;
+                self.registers[r1] ^= imm2;
                 None
             }
             Operation::SHL => {
                 let r1 = self.next_reg(1)?;
-
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1 as usize] =
-                    self.registers[r1 as usize] << self.registers[r2 as usize];
+                self.registers[r1] = self.registers[r1] << self.registers[r2];
                 None
             }
             Operation::SHL_IMM => {
                 let r1 = self.next_reg(1)?;
+                let imm2: u16 = self.next(2)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 4) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                self.registers[r1 as usize] = self.registers[r1 as usize] << imm2;
+                self.registers[r1] = self.registers[r1] << imm2;
                 None
             }
             Operation::SHR => {
                 let r1 = self.next_reg(1)?;
-
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1 as usize] =
-                    self.registers[r1 as usize] >> self.registers[r2 as usize];
+                self.registers[r1] = self.registers[r1] >> self.registers[r2];
                 None
             }
             Operation::SHR_IMM => {
                 let r1 = self.next_reg(1)?;
+                let imm2: u16 = self.next(2)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                self.registers[r1 as usize] = self.registers[r1 as usize] >> imm2;
+                self.registers[r1] = self.registers[r1] >> imm2;
                 None
             }
             Operation::CMP => {
                 let r1 = self.next_reg(1)?;
-
                 let r2 = self.next_reg(2)?;
 
-                if self.registers[r1 as usize] == self.registers[r2 as usize] {
+                if self.registers[r1] == self.registers[r2] {
                     self.equal = true;
                 } else {
                     self.equal = false;
@@ -624,15 +559,9 @@ impl<'a> VirtualMachine<'a> {
             }
             Operation::CMP_IMM => {
                 let r1 = self.next_reg(1)?;
+                let imm2: u16 = self.next(2)?;
 
-                let imm2 = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 4) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-
-                if self.registers[r1 as usize] == imm2 {
+                if self.registers[r1] == imm2 {
                     self.equal = true;
                 } else {
                     self.equal = false;
@@ -642,9 +571,10 @@ impl<'a> VirtualMachine<'a> {
             Operation::PUSH => {
                 let r1 = self.next_reg(1)?;
 
-                self.registers[Register::RSP as usize] -= 1;
-                self.memory[self.registers[Register::RSP as usize] as usize] =
-                    self.registers[r1 as usize];
+                self.registers[Register::RSP as usize] = self.registers[Register::RSP as usize]
+                    .checked_sub(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
+                self.memory[self.registers[Register::RSP as usize] as usize] = self.registers[r1];
 
                 None
             }
@@ -653,17 +583,12 @@ impl<'a> VirtualMachine<'a> {
 
                 self.registers[Register::RSP as usize] -= 1;
                 self.memory[self.registers[Register::RSP as usize] as usize] =
-                    self.memory[self.registers[r1 as usize] as usize];
+                    self.memory[self.registers[r1] as usize];
 
                 None
             }
             Operation::PUSH_IMM => {
-                let val_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let val_imm = self.next(1)?;
                 self.registers[Register::RSP as usize] -= 1;
                 self.memory[self.registers[Register::RSP as usize] as usize] = val_imm;
                 None
@@ -671,8 +596,7 @@ impl<'a> VirtualMachine<'a> {
             Operation::POP => {
                 let r1 = self.next_reg(1)?;
 
-                self.registers[r1 as usize] =
-                    self.memory[self.registers[Register::RSP as usize] as usize];
+                self.registers[r1] = self.memory[self.registers[Register::RSP as usize] as usize];
                 self.registers[Register::RSP as usize] += 1;
 
                 None
@@ -680,21 +604,16 @@ impl<'a> VirtualMachine<'a> {
             Operation::POP_M => {
                 let r1 = self.next_reg(1)?;
 
-                self.memory[self.registers[r1 as usize] as usize] =
+                self.memory[self.registers[r1] as usize] =
                     self.memory[self.registers[Register::RSP as usize] as usize];
                 self.registers[Register::RSP as usize] += 1;
 
                 None
             }
             Operation::POP_IMM => {
-                let addr_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                ) as usize;
+                let addr_imm: u16 = self.next(1)?;
 
-                self.memory[addr_imm] =
+                self.memory[addr_imm as usize] =
                     self.memory[self.registers[Register::RSP as usize] as usize];
                 self.registers[Register::RSP as usize] += 1;
 
@@ -703,51 +622,36 @@ impl<'a> VirtualMachine<'a> {
             Operation::JMP => {
                 let r1 = self.next_reg(1)?;
 
-                Some(self.registers[r1 as usize])
+                Some(self.registers[r1])
             }
             Operation::JMP_IMM => {
-                let addr_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let addr_imm = self.next(1)?;
                 Some(addr_imm)
             }
             Operation::JE => {
                 let r1 = self.next_reg(1)?;
 
                 if self.equal {
-                    Some(self.registers[r1 as usize])
+                    Some(self.registers[r1])
                 } else {
                     None
                 }
             }
             Operation::JE_IMM => {
-                let addr_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let addr_imm = self.next(1)?;
                 if self.equal { Some(addr_imm) } else { None }
             }
             Operation::JNE => {
                 let r1 = self.next_reg(1)?;
 
                 if !self.equal {
-                    Some(self.registers[r1 as usize])
+                    Some(self.registers[r1])
                 } else {
                     None
                 }
             }
             Operation::JNE_IMM => {
-                let addr_imm = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 1) as usize
-                        ..(self.current_instruction + 3) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let addr_imm = self.next(1)?;
                 if !self.equal { Some(addr_imm) } else { None }
             }
             Operation::CALL => {
@@ -758,8 +662,6 @@ impl<'a> VirtualMachine<'a> {
         };
 
         // 3. Increment PC (Advance to the NEXT instruction)
-        // Note: Do this BEFORE execution if instructions are fixed-width,
-        // or let execution modify it if it's a Jump.
         let offset = arg_type.to_offset() as u16;
         self.current_instruction += offset;
 
@@ -782,15 +684,37 @@ impl<'a> VirtualMachine<'a> {
 }
 
 fn main() {
+    env_logger::builder()
+        .format_timestamp(None)
+        .parse_default_env()
+        .init();
+
     let a: &Path = Path::new("test.vmr");
     let code: Vec<u8> = std::fs::read(a).unwrap();
     let mut registers: Vec<u16> = Vec::with_capacity(17);
-    unsafe {
-        registers.set_len(17);
+
+    for _ in 0..=17 {
+        registers.push(0);
     }
-    registers.fill(0);
+    registers[Register::RSP as usize] = 0xFFFF;
+
     let mut registers_slice: &mut [u16; 17] = &mut (registers[0..17].try_into().unwrap());
     let mut vm = VirtualMachine::from_bytes(code, &mut registers_slice);
-    while vm.cycle().is_ok() {}
+    loop {
+        match vm.cycle() {
+            Ok(_) => {}
+            Err(e) => {
+                match e {
+                    RuntimeError::Halted => {
+                        eprintln!("Program halted.");
+                    }
+                    _ => {
+                        error!("RUNTIME ERROR: {e:02x?}")
+                    }
+                }
+                break;
+            }
+        };
+    }
     println!("{vm}");
 }
