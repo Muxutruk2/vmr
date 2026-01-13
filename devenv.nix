@@ -4,7 +4,11 @@
 }:
 
 {
-  packages = with pkgs; [ hexedit ];
+  packages = with pkgs; [
+    hexedit
+    wxhexeditor
+    cargo-watch
+  ];
 
   languages.rust.enable = true;
 }

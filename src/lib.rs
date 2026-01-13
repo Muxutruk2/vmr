@@ -116,18 +116,19 @@ impl Operation {
             // Single Operand: Register or Immediate
             Operation::PUSH
             | Operation::PUSH_M
-            | Operation::PUSH_IMM
             | Operation::POP
             | Operation::POP_M
-            | Operation::POP_IMM
             | Operation::JMP
-            | Operation::JMP_IMM
             | Operation::JE
-            | Operation::JE_IMM
             | Operation::JNE
+            | Operation::CALL => Arguments::Reg,
+
+            Operation::CALL_IMM
+            | Operation::PUSH_IMM
+            | Operation::POP_IMM
+            | Operation::JMP_IMM
             | Operation::JNE_IMM
-            | Operation::CALL
-            | Operation::CALL_IMM => Arguments::Reg,
+            | Operation::JE_IMM => Arguments::Imm,
 
             // Two Operands: Register, Register
             Operation::MOV
@@ -180,6 +181,7 @@ pub enum Arguments {
     ImmImm = 0x04,
     RegImmReg = 0x05,
     ImmReg = 0x06,
+    Imm,
 }
 
 impl Arguments {
@@ -187,6 +189,7 @@ impl Arguments {
         match self {
             Arguments::None => 1,
             Arguments::Reg => 2,
+            Arguments::Imm => 3,
             Arguments::RegReg => 3,
             Arguments::RegImm => 4,
             Arguments::ImmImm => 5,

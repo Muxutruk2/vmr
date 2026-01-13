@@ -1,3 +1,5 @@
+#![deny(clippy::arithmetic_side_effects)]
+#![deny(clippy::indexing_slicing)]
 use clap::Parser;
 use libvmr::{Operation, Register};
 use log::{debug, error};
@@ -18,39 +20,38 @@ struct VirtualMachine {
 
 impl std::fmt::Display for VirtualMachine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CODE\n")?;
+        writeln!(f, "CODE")?;
         for byte in self.code.iter() {
             write!(f, "{byte:02x} ")?;
         }
-        write!(f, "\nMEMORY\n")?;
+        writeln!(f, "\nMEMORY")?;
         let last_index = self.memory.iter().rposition(|&x| x != 0);
 
         match last_index {
             Some(index) => {
-                for byte in self.memory[0..index].iter() {
+                for byte in self.memory.get(0..index).unwrap().iter() {
                     write!(f, "{byte:04x} ")?;
                 }
             }
             None => write!(f, "<EMPTY> ")?,
         }
-        write!(
-            f,
-            "\nInstruction Address: {:04x}\n",
-            self.current_instruction
-        )?;
-        write!(
-            f,
-            "Instruction Byte: {:02x}\n",
-            self.code[self.current_instruction as usize]
-        )?;
-        write!(f, "Registers\n")?;
+        writeln!(f, "\nInstruction Address: {:04x}", self.current_instruction)?;
+        match self.code.get(self.current_instruction as usize) {
+            Some(n) => {
+                writeln!(f, "Instruction Byte: {:02x}", n)?;
+            }
+            None => {
+                writeln!(f, "Instruction Byte: NOT_FOUND")?;
+            }
+        }
+        writeln!(f, "Registers")?;
         for reg in self.registers.iter() {
             write!(f, "{:04x} ", reg)?;
         }
         if self.equal {
-            write!(f, "Equal: Set\n")?;
+            writeln!(f, "Equal: Set")?;
         } else {
-            write!(f, "Equal: Unset\n")?;
+            writeln!(f, "Equal: Unset")?;
         }
 
         Ok(())
@@ -97,6 +98,31 @@ impl VirtualMachine {
         Ok(T::from_be_bytes(&array))
     }
 
+    fn get_mem<T: Into<usize>>(&self, offset: T) -> Result<u16, RuntimeError> {
+        self.memory
+            .get(offset.into())
+            .ok_or(RuntimeError::MemoryOOB)
+            .copied()
+    }
+
+    fn get_mem_mut<T: Into<usize>>(&mut self, offset: T) -> Result<&mut u16, RuntimeError> {
+        self.memory
+            .get_mut(offset.into())
+            .ok_or(RuntimeError::MemoryOOB)
+    }
+
+    fn get_reg<T: Into<usize>>(&self, register: T) -> Result<u16, RuntimeError> {
+        self.registers
+            .get(register.into())
+            .ok_or(RuntimeError::InvalidRegister)
+            .copied()
+    }
+    fn get_reg_mut<T: Into<usize>>(&mut self, register: T) -> Result<&mut u16, RuntimeError> {
+        self.registers
+            .get_mut(register.into())
+            .ok_or(RuntimeError::InvalidRegister)
+    }
+
     pub fn cycle(&mut self) -> Result<(), RuntimeError> {
         let pc = self.current_instruction as usize;
 
@@ -104,19 +130,19 @@ impl VirtualMachine {
             return Err(RuntimeError::InstructionOOB);
         }
 
-        let op_code = self.code[pc];
+        let op_code = *self.code.get(pc).ok_or(RuntimeError::InstructionOOB)?;
         let op = match Operation::from_u8(op_code) {
             Some(o) => Ok(o),
             None => Err(RuntimeError::InvalidOPCode(op_code)),
         }?;
         let arg_type = op.arg_type();
 
-        let end = std::cmp::min(pc + 5, self.code.len());
+        let end = std::cmp::min(pc.wrapping_add(5), self.code.len());
         debug!(
             "PC: {pc:02x} | Op: {:-13} | Args: {:-20} | Next 6 bytes {:02x?}",
             format!("{:?}", op),
             format!("{:?}", arg_type),
-            &self.code[pc..end]
+            &self.code.get(pc..end).unwrap()
         );
 
         let new_addr: Option<u16> = match op {
@@ -127,43 +153,39 @@ impl VirtualMachine {
                 let r2 = self.next_reg(2)?;
 
                 // 1 <- 2
-                self.registers[r1] = self.registers[r2];
+                *self.get_reg_mut(r1)? = self.get_reg(r2)?;
                 None
             }
             Operation::MOV_IMM => {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
 
-                self.registers[r1] = imm2;
+                *self.get_reg_mut(r1)? = imm2;
                 None
             }
             Operation::LOAD => {
                 let r1 = self.next_reg(1)?;
                 let r2 = self.next_reg(2)?;
 
-                let address = self.registers[r2] as usize;
-                self.registers[r1] = self.memory[address];
+                let address = self.get_reg(r2)?;
+                *self.get_reg_mut(r1)? = self.get_mem(address)?;
+
                 None
             }
 
             Operation::LOAD_REL => {
                 let r1 = self.next_reg(1)?;
 
-                let offset = i16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 4) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let offset: i16 = self.next(2)?;
 
                 let r3 = self.next_reg(4)?;
 
-                let base_addr = self.registers[r1] as i32;
+                let base_addr = self.get_reg(r1)? as i32;
                 let final_addr = base_addr
                     .checked_add(offset as i32)
-                    .ok_or(RuntimeError::OffsetOOB)?;
+                    .ok_or(RuntimeError::OffsetOOB)? as usize;
 
-                self.registers[r3 as usize] = self.memory[final_addr as usize];
+                *self.get_reg_mut(r3)? = self.get_mem(final_addr)?;
                 None
             }
 
@@ -172,14 +194,16 @@ impl VirtualMachine {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r2] = self.memory[addr_imm as usize];
+                *self.get_reg_mut(r2)? = self.get_mem(addr_imm)?;
+
                 None
             }
             Operation::STORE_R_R => {
                 let r1 = self.next_reg(1)?;
+
                 let r2 = self.next_reg(2)?;
 
-                self.memory[self.registers[r1] as usize] = self.registers[r2];
+                *self.get_mem_mut(self.get_reg(r1)?)? = self.get_reg(r2)?;
                 None
             }
             Operation::STORE_REL_R => {
@@ -189,12 +213,13 @@ impl VirtualMachine {
 
                 let r3 = self.next_reg(4)?;
 
-                let base_addr = self.registers[r1] as i32;
-                let final_addr = base_addr
+                let base_addr = self.get_reg(r1)? as i32;
+                let final_addr: usize = base_addr
                     .checked_add(offset as i32)
-                    .ok_or(RuntimeError::OffsetOOB)?;
+                    .ok_or(RuntimeError::OffsetOOB)?
+                    as usize;
 
-                self.memory[final_addr as usize] = self.registers[r3 as usize];
+                *self.get_mem_mut(final_addr)? = self.get_reg(r3)?;
                 None
             }
             Operation::STORE_IMM_R => {
@@ -202,50 +227,37 @@ impl VirtualMachine {
 
                 let r2 = self.next_reg(2)?;
 
-                self.memory[addr_imm as usize] = self.registers[r2];
+                *self.get_mem_mut(addr_imm)? = self.get_reg(r2)?;
                 None
             }
             Operation::STORE_R_IMM => {
                 let r1 = self.next_reg(1)?;
 
-                let imm_value = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 4) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                self.memory[self.registers[r1] as usize] = imm_value;
+                let imm_value = self.next(2)?;
+
+                *self.get_mem_mut(self.get_reg(r1)?)? = imm_value;
+
                 None
             }
             Operation::STORE_REL_IMM => {
                 let r1 = self.next_reg(1)?;
 
-                let offset = i16::from_be_bytes(
-                    self.code[(self.current_instruction + 2) as usize
-                        ..(self.current_instruction + 4) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
-                let imm_value = u16::from_be_bytes(
-                    self.code[(self.current_instruction + 5) as usize
-                        ..(self.current_instruction + 7) as usize]
-                        .try_into()
-                        .unwrap(),
-                );
+                let offset: i16 = self.next(2)?;
+                let imm_value: u16 = self.next(5)?;
 
-                let base_addr = self.registers[r1] as i32;
+                let base_addr = self.get_reg(r1)? as i32;
                 let final_addr = base_addr
                     .checked_add(offset as i32)
                     .ok_or(RuntimeError::OffsetOOB)? as usize;
 
-                self.memory[final_addr] = imm_value;
+                *self.get_mem_mut(final_addr)? = imm_value;
                 None
             }
             Operation::STORE_IMM_IMM => {
                 let addr_imm: u16 = self.next(1)?;
-                let value_imm = self.next(3)?;
+                let imm_value = self.next(3)?;
 
-                self.memory[addr_imm as usize] = value_imm;
+                *self.get_mem_mut(addr_imm)? = imm_value;
                 None
             }
             Operation::ADD => {
@@ -253,7 +265,7 @@ impl VirtualMachine {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1] = self.registers[r1].wrapping_add(self.registers[r2]);
+                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_add(self.get_reg(r2)?);
                 None
             }
             Operation::ADD_IMM => {
@@ -261,7 +273,7 @@ impl VirtualMachine {
 
                 let imm2: u16 = self.next(2)?;
 
-                self.registers[r1] = self.registers[r1].wrapping_add(imm2);
+                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_add(imm2);
                 None
             }
             Operation::SUB => {
@@ -269,7 +281,7 @@ impl VirtualMachine {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1] = self.registers[r1].wrapping_sub(self.registers[r2]);
+                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_sub(self.get_reg(r2)?);
                 None
             }
             Operation::SUB_IMM => {
@@ -277,7 +289,8 @@ impl VirtualMachine {
 
                 let imm2: u16 = self.next(2)?;
 
-                self.registers[r1] = self.registers[r1].wrapping_sub(imm2);
+                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_sub(imm2);
+
                 None
             }
             Operation::AND => {
@@ -285,13 +298,13 @@ impl VirtualMachine {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1] &= self.registers[r2];
+                *self.get_reg_mut(r1)? &= self.get_reg(r2)?;
                 None
             }
             Operation::AND_IMM => {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
-                self.registers[r1] &= imm2;
+                *self.get_reg_mut(r1)? &= imm2;
                 None
             }
             Operation::OR => {
@@ -299,14 +312,14 @@ impl VirtualMachine {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1] |= self.registers[r2];
+                *self.get_reg_mut(r1)? |= self.get_reg(r2)?;
                 None
             }
             Operation::OR_IMM => {
                 let r1 = self.next_reg(1)?;
 
                 let imm2: u16 = self.next(2)?;
-                self.registers[r1] |= imm2;
+                *self.get_reg_mut(r1)? |= imm2;
                 None
             }
             Operation::XOR => {
@@ -314,121 +327,137 @@ impl VirtualMachine {
 
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1] ^= self.registers[r2];
+                *self.get_reg_mut(r1)? ^= self.get_reg(r2)?;
                 None
             }
             Operation::XOR_IMM => {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
 
-                self.registers[r1] ^= imm2;
+                *self.get_reg_mut(r1)? ^= imm2;
                 None
             }
             Operation::SHL => {
                 let r1 = self.next_reg(1)?;
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1] = self.registers[r1] << self.registers[r2];
+                *self.get_reg_mut(r1)? <<= self.get_reg(r2)?;
                 None
             }
             Operation::SHL_IMM => {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
 
-                self.registers[r1] = self.registers[r1] << imm2;
+                *self.get_reg_mut(r1)? <<= imm2;
                 None
             }
             Operation::SHR => {
                 let r1 = self.next_reg(1)?;
                 let r2 = self.next_reg(2)?;
 
-                self.registers[r1] = self.registers[r1] >> self.registers[r2];
+                *self.get_reg_mut(r1)? >>= self.get_reg(r2)?;
                 None
             }
             Operation::SHR_IMM => {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
 
-                self.registers[r1] = self.registers[r1] >> imm2;
+                *self.get_reg_mut(r1)? >>= imm2;
                 None
             }
             Operation::CMP => {
                 let r1 = self.next_reg(1)?;
                 let r2 = self.next_reg(2)?;
 
-                if self.registers[r1] == self.registers[r2] {
-                    self.equal = true;
-                } else {
-                    self.equal = false;
-                }
+                self.equal = self.get_reg(r1)? == self.get_reg(r2)?;
                 None
             }
             Operation::CMP_IMM => {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
 
-                if self.registers[r1] == imm2 {
-                    self.equal = true;
-                } else {
-                    self.equal = false;
-                }
+                self.equal = self.get_reg(r1)? == imm2;
                 None
             }
             Operation::PUSH => {
                 let r1 = self.next_reg(1)?;
 
-                self.registers[Register::RSP as usize] = self.registers[Register::RSP as usize]
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
                     .checked_sub(1)
                     .ok_or(RuntimeError::StackOverflow)?;
-                self.memory[self.registers[Register::RSP as usize] as usize] = self.registers[r1];
+
+                *self.get_mem_mut(self.get_reg(Register::RSP as usize)?)? =
+                    self.get_mem(self.get_reg(r1)?)?;
 
                 None
             }
             Operation::PUSH_M => {
                 let r1 = self.next_reg(1)?;
 
-                self.registers[Register::RSP as usize] -= 1;
-                self.memory[self.registers[Register::RSP as usize] as usize] =
-                    self.memory[self.registers[r1] as usize];
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_sub(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
+
+                *self.get_mem_mut(self.get_reg(Register::RSP as usize)?)? =
+                    self.get_mem(self.get_reg(r1)?)?;
 
                 None
             }
             Operation::PUSH_IMM => {
                 let val_imm = self.next(1)?;
-                self.registers[Register::RSP as usize] -= 1;
-                self.memory[self.registers[Register::RSP as usize] as usize] = val_imm;
+
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_sub(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
+
+                *self.get_mem_mut(self.get_reg(Register::RSP as usize)?)? = val_imm;
                 None
             }
             Operation::POP => {
                 let r1 = self.next_reg(1)?;
 
-                self.registers[r1] = self.memory[self.registers[Register::RSP as usize] as usize];
-                self.registers[Register::RSP as usize] += 1;
+                *self.get_reg_mut(r1)? = self.get_mem(self.get_reg(Register::RSP as usize)?)?;
+
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_add(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
 
                 None
             }
             Operation::POP_M => {
                 let r1 = self.next_reg(1)?;
 
-                self.memory[self.registers[r1] as usize] =
-                    self.memory[self.registers[Register::RSP as usize] as usize];
-                self.registers[Register::RSP as usize] += 1;
+                *self.get_mem_mut(self.get_reg(r1)?)? =
+                    self.get_mem(self.get_reg(Register::RSP as usize)?)?;
+
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_add(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
 
                 None
             }
             Operation::POP_IMM => {
                 let addr_imm: u16 = self.next(1)?;
 
-                self.memory[addr_imm as usize] =
-                    self.memory[self.registers[Register::RSP as usize] as usize];
-                self.registers[Register::RSP as usize] += 1;
+                *self.get_mem_mut(addr_imm)? =
+                    self.get_mem(self.get_reg(Register::RSP as usize)?)?;
+
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_add(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
 
                 None
             }
             Operation::JMP => {
                 let r1 = self.next_reg(1)?;
 
-                Some(self.registers[r1])
+                Some(self.get_reg(r1)?)
             }
             Operation::JMP_IMM => {
                 let addr_imm = self.next(1)?;
@@ -438,7 +467,7 @@ impl VirtualMachine {
                 let r1 = self.next_reg(1)?;
 
                 if self.equal {
-                    Some(self.registers[r1])
+                    Some(self.get_reg(r1)?)
                 } else {
                     None
                 }
@@ -451,7 +480,7 @@ impl VirtualMachine {
                 let r1 = self.next_reg(1)?;
 
                 if !self.equal {
-                    Some(self.registers[r1])
+                    Some(self.get_reg(r1)?)
                 } else {
                     None
                 }
@@ -461,21 +490,66 @@ impl VirtualMachine {
                 if !self.equal { Some(addr_imm) } else { None }
             }
             Operation::CALL => {
-                todo!();
+                let r1 = self.next_reg(1)?;
+
+                let ret_addr = self.next_instruction_addr()?;
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_sub(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
+                *self.get_mem_mut(self.get_reg(Register::RSP as usize)?)? = ret_addr;
+
+                Some(self.get_reg(r1)?)
             }
-            Operation::CALL_IMM => todo!(),
-            Operation::RET => todo!(),
+            Operation::CALL_IMM => {
+                let addr_imm = self.next(1)?;
+
+                let ret_addr = self.next_instruction_addr()?;
+
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_sub(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
+
+                *self.get_mem_mut(self.get_reg(Register::RSP as usize)?)? = ret_addr;
+
+                Some(addr_imm)
+            }
+            Operation::RET => {
+                let ret_addr = self.get_mem(self.get_reg(Register::RSP as usize)?)?;
+
+                *self.get_reg_mut(Register::RSP as usize)? = self
+                    .get_reg(Register::RSP as usize)?
+                    .checked_add(1)
+                    .ok_or(RuntimeError::StackOverflow)?;
+
+                Some(ret_addr)
+            }
         };
 
         if let Some(addr) = new_addr {
             // If JUMP instruction called
             self.current_instruction = addr;
         } else {
-            let offset = arg_type.to_offset() as u16;
-            self.current_instruction += offset;
+            self.current_instruction = self.next_instruction_addr()?;
         }
 
         Ok(())
+    }
+
+    fn next_instruction_addr(&self) -> Result<u16, RuntimeError> {
+        let op_num = self
+            .code
+            .get(self.current_instruction as usize)
+            .ok_or(RuntimeError::InstructionOOB)?;
+
+        let curr_op = Operation::from_u8(*op_num).ok_or(RuntimeError::InvalidOPCode(*op_num))?;
+
+        let arg_type = curr_op.arg_type();
+        let offset = arg_type.to_offset() as u16;
+        self.current_instruction
+            .checked_add(offset)
+            .ok_or(RuntimeError::InstructionOOB)
     }
 
     pub fn from_bytes(code: Vec<u8>, registers: Vec<u16>) -> Self {
@@ -505,11 +579,9 @@ fn main() {
     let code: Vec<u8> = std::fs::read(args.input_file).unwrap();
     let mut registers: Vec<u16> = Vec::with_capacity(17);
 
-    for _ in 0..=17 {
-        registers.push(0);
-    }
+    registers.extend(std::iter::repeat_n(0, 17));
 
-    registers[Register::RSP as usize] = 0xFFFF;
+    *registers.get_mut(Register::RSP as usize).unwrap() = 0xFFFF;
 
     let mut vm = VirtualMachine::from_bytes(code, registers);
     loop {
@@ -518,9 +590,10 @@ fn main() {
             Err(e) => {
                 match e {
                     RuntimeError::Halted => {
-                        eprintln!("Program halted.");
+                        debug!("Program halted.");
                     }
                     _ => {
+                        error!("{vm}");
                         error!("RUNTIME ERROR: {e:02x?}")
                     }
                 }
@@ -528,5 +601,4 @@ fn main() {
             }
         };
     }
-    println!("{vm}");
 }
