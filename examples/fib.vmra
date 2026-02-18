@@ -1,27 +1,27 @@
 START:
-    MOV_IMM R2, 0x15
+    MOV_IMM R1, 0x15
     CALL_IMM FIB
     HALT
 FIB:
-    CMP_IMM R2, 0x00
+    CMP_IMM R1, 0x00
     JE_IMM LESS
-    CMP_IMM R2, 0x01
+    CMP_IMM R1, 0x01
     JE_IMM LESS
     
-    PUSH R2
-    SUB_IMM R2, 0x01
+    PUSH R1
+    SUB_IMM R1, 0x01
     CALL_IMM FIB
     
-    POP R2
-    PUSH R1
+    POP R1
+    PUSH R0
     
-    SUB_IMM R2, 0x02
+    SUB_IMM R1, 0x02
     CALL_IMM FIB
     
     POP R5
-    ADD R1, R5
+    ADD R0, R5
     RET
 
 LESS:
-    MOV_IMM R1, 0x01
+    MOV_IMM R0, 0x01
     RET
