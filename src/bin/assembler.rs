@@ -155,6 +155,7 @@ impl Assembler {
 
     fn parse_reg(&self, s: &str) -> Result<Register, String> {
         match s.to_uppercase().as_str() {
+            "R0" => Ok(Register::R0),
             "R1" => Ok(Register::R1),
             "R2" => Ok(Register::R2),
             "R3" => Ok(Register::R3),
@@ -170,7 +171,6 @@ impl Assembler {
             "R13" => Ok(Register::R13),
             "R14" => Ok(Register::R14),
             "R15" => Ok(Register::R15),
-            "R16" => Ok(Register::R16),
             "RSP" => Ok(Register::RSP),
             _ => Err(format!("Invalid register: {}", s)),
         }

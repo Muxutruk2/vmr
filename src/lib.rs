@@ -4,6 +4,7 @@ extern crate num_derive;
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
 pub enum Register {
+    R0,
     R1,
     R2,
     R3,
@@ -19,7 +20,6 @@ pub enum Register {
     R13,
     R14,
     R15,
-    R16,
     RSP,
 }
 

@@ -652,8 +652,8 @@ fn main() {
 
     println!(
         "Program exited with code {} ({:x})",
-        vm.get_reg(Register::R1 as usize).unwrap(),
-        vm.get_reg(Register::R1 as usize).unwrap()
+        vm.get_reg(Register::R0 as usize).unwrap(),
+        vm.get_reg(Register::R0 as usize).unwrap()
     );
 
     let milisecond = std::time::SystemTime::now()
