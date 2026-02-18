@@ -2,7 +2,7 @@
 #![deny(clippy::indexing_slicing)]
 use clap::Parser;
 use libvmr::{Operation, Register};
-use log::{debug, error};
+use log::{debug, error, trace};
 use num_traits::cast::FromPrimitive;
 use std::{
     fs::{self, File},
@@ -417,8 +417,6 @@ impl VirtualMachine {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
 
-                debug!("Comparing {} to {}", self.get_reg(r1)?, imm2);
-
                 self.equal = self.get_reg(r1)? == imm2;
                 None
             }
@@ -464,28 +462,12 @@ impl VirtualMachine {
             Operation::POP => {
                 let r1 = self.next_reg(1)?;
 
-                debug!("POP: DESTINATION REGISTER: {r1}");
-                debug!("CURRENT VALUE THERE: {:x}", self.get_reg(r1)?);
-                debug!(
-                    "POP: RSP POINTS TO {:x}",
-                    self.get_reg(Register::RSP as usize)?
-                );
-                debug!(
-                    "POP: RSP MEMORY {:x}",
-                    self.get_mem(self.get_reg(Register::RSP as usize)?)?
-                );
-
                 *self.get_reg_mut(r1)? = self.get_mem(self.get_reg(Register::RSP as usize)?)?;
 
                 *self.get_reg_mut(Register::RSP as usize)? = self
                     .get_reg(Register::RSP as usize)?
                     .checked_add(1)
                     .ok_or(RuntimeError::StackOverflow)?;
-
-                debug!(
-                    "POP: RSP NOW POINTS TO {:x}",
-                    self.get_reg(Register::RSP as usize)?
-                );
 
                 None
             }
@@ -595,7 +577,7 @@ impl VirtualMachine {
             self.current_instruction = self.next_instruction_addr()?;
         }
 
-        debug!("{self}");
+        trace!("{self}");
 
         Ok(())
     }
@@ -667,6 +649,12 @@ fn main() {
             }
         };
     }
+
+    println!(
+        "Program exited with code {} ({:x})",
+        vm.get_reg(Register::R1 as usize).unwrap(),
+        vm.get_reg(Register::R1 as usize).unwrap()
+    );
 
     let milisecond = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
