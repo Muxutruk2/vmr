@@ -4,7 +4,12 @@ use clap::Parser;
 use libvmr::{Operation, Register};
 use log::{debug, error};
 use num_traits::cast::FromPrimitive;
-use std::path::PathBuf;
+use std::{
+    fs::{self, File},
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
+};
 
 pub type Immediate = u16;
 pub type Offset = i16;
@@ -23,17 +28,6 @@ impl std::fmt::Display for VirtualMachine {
         writeln!(f, "CODE")?;
         for byte in self.code.iter() {
             write!(f, "{byte:02x} ")?;
-        }
-        writeln!(f, "\nMEMORY")?;
-        let last_index = self.memory.iter().rposition(|&x| x != 0);
-
-        match last_index {
-            Some(index) => {
-                for byte in self.memory.get(0..index).unwrap().iter() {
-                    write!(f, "{byte:04x} ")?;
-                }
-            }
-            None => write!(f, "<EMPTY> ")?,
         }
         writeln!(f, "\nInstruction Address: {:04x}", self.current_instruction)?;
         match self.code.get(self.current_instruction as usize) {
@@ -54,6 +48,32 @@ impl std::fmt::Display for VirtualMachine {
             writeln!(f, "Equal: Unset")?;
         }
 
+        let rsp = self.get_reg(Register::RSP as usize).unwrap_or(0) as isize;
+        let memory_len = self.memory.len() as isize;
+
+        writeln!(f, "Stack Dump:")?;
+
+        let range = -5..=5;
+
+        // "0x0000 " 7 characters.
+        // 5 blocks * 7 chars = 35 spaces of offset.
+        let indent = " ".repeat(5 * 7);
+        writeln!(f, "{} ↓RSP", indent)?;
+
+        for offset in range {
+            let target_idx = rsp + offset;
+
+            if target_idx >= 0 && target_idx < memory_len {
+                // Access valid memory
+                let val = self.memory[target_idx as usize];
+                write!(f, "{:#06x} ", val)?;
+            } else {
+                // Out of bounds placeholder
+                write!(f, "  __   ")?;
+            }
+        }
+
+        writeln!(f)?; // Final newline
         Ok(())
     }
 }
@@ -121,6 +141,27 @@ impl VirtualMachine {
         self.registers
             .get_mut(register.into())
             .ok_or(RuntimeError::InvalidRegister)
+    }
+
+    fn dump_mem_bin<T: Sized + Write>(&self, f: &mut BufWriter<T>) -> std::io::Result<()> {
+        let data: &[u8] = bytemuck::cast_slice(&self.memory);
+        f.write_all(data)?;
+        Ok(())
+    }
+
+    fn dump_mem_readable<T: Sized + Write>(&self, f: &mut BufWriter<T>) -> std::io::Result<()> {
+        let last_index = self.memory.iter().rposition(|&x| x != 0);
+
+        match last_index {
+            Some(index) => {
+                for byte in self.memory.get(0..index).unwrap().iter() {
+                    write!(f, "{byte:04x} ")?;
+                }
+            }
+            None => write!(f, "<EMPTY> ")?,
+        }
+
+        Ok(())
     }
 
     pub fn cycle(&mut self) -> Result<(), RuntimeError> {
@@ -376,20 +417,24 @@ impl VirtualMachine {
                 let r1 = self.next_reg(1)?;
                 let imm2: u16 = self.next(2)?;
 
+                debug!("Comparing {} to {}", self.get_reg(r1)?, imm2);
+
                 self.equal = self.get_reg(r1)? == imm2;
                 None
             }
             Operation::PUSH => {
                 let r1 = self.next_reg(1)?;
+                let val = self.get_reg(r1)?;
 
-                *self.get_reg_mut(Register::RSP as usize)? = self
+                // Decrement Stack Pointer
+                let new_rsp = self
                     .get_reg(Register::RSP as usize)?
                     .checked_sub(1)
                     .ok_or(RuntimeError::StackOverflow)?;
+                *self.get_reg_mut(Register::RSP as usize)? = new_rsp;
 
-                *self.get_mem_mut(self.get_reg(Register::RSP as usize)?)? =
-                    self.get_mem(self.get_reg(r1)?)?;
-
+                // 2. Store the REGISTER VALUE into memory at RSP
+                *self.get_mem_mut(new_rsp)? = val;
                 None
             }
             Operation::PUSH_M => {
@@ -419,12 +464,28 @@ impl VirtualMachine {
             Operation::POP => {
                 let r1 = self.next_reg(1)?;
 
+                debug!("POP: DESTINATION REGISTER: {r1}");
+                debug!("CURRENT VALUE THERE: {:x}", self.get_reg(r1)?);
+                debug!(
+                    "POP: RSP POINTS TO {:x}",
+                    self.get_reg(Register::RSP as usize)?
+                );
+                debug!(
+                    "POP: RSP MEMORY {:x}",
+                    self.get_mem(self.get_reg(Register::RSP as usize)?)?
+                );
+
                 *self.get_reg_mut(r1)? = self.get_mem(self.get_reg(Register::RSP as usize)?)?;
 
                 *self.get_reg_mut(Register::RSP as usize)? = self
                     .get_reg(Register::RSP as usize)?
                     .checked_add(1)
                     .ok_or(RuntimeError::StackOverflow)?;
+
+                debug!(
+                    "POP: RSP NOW POINTS TO {:x}",
+                    self.get_reg(Register::RSP as usize)?
+                );
 
                 None
             }
@@ -534,6 +595,8 @@ impl VirtualMachine {
             self.current_instruction = self.next_instruction_addr()?;
         }
 
+        debug!("{self}");
+
         Ok(())
     }
 
@@ -566,6 +629,8 @@ impl VirtualMachine {
 #[derive(clap::Parser)]
 struct Args {
     input_file: PathBuf,
+    #[arg(short)]
+    dump: bool,
 }
 
 fn main() {
@@ -590,6 +655,7 @@ fn main() {
             Err(e) => {
                 match e {
                     RuntimeError::Halted => {
+                        debug!("{vm}");
                         debug!("Program halted.");
                     }
                     _ => {
@@ -600,5 +666,46 @@ fn main() {
                 break;
             }
         };
+    }
+
+    let milisecond = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time travel")
+        .as_millis();
+
+    if args.dump {
+        if let Err(e) = fs::create_dir_all("./dumps") {
+            error!("Failed to create dumps directory: {e}");
+        } else {
+            let readable_path_str = format!("./dumps/readable_{milisecond}.txt");
+            let bin_path_str = format!("./dumps/raw_{milisecond}.bin");
+            let readable_path = Path::new(&readable_path_str);
+            let bin_path = Path::new(&bin_path_str);
+
+            let try_create = || -> Result<(File, File), std::io::Error> {
+                let f1 = File::create(readable_path)?;
+                let f2 = File::create(bin_path)?;
+                Ok((f1, f2))
+            };
+
+            match try_create() {
+                Ok((readable_file, bin_file)) => {
+                    let mut readable_writer = BufWriter::new(readable_file);
+                    let mut bin_writer = BufWriter::new(bin_file);
+                    vm.dump_mem_bin(&mut bin_writer)
+                        .expect("Could not write binary dump");
+                    vm.dump_mem_readable(&mut readable_writer)
+                        .expect("Could not write binary dump");
+                    eprintln!(
+                        "Memory dumped at {} and {}",
+                        readable_path.display(),
+                        bin_path.display()
+                    );
+                }
+                Err(e) => {
+                    error!("Skipping dump: Could not create files: {e}");
+                }
+            }
+        }
     }
 }
