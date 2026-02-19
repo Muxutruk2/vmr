@@ -45,6 +45,8 @@ DO_SYSCALL:
     MOV R3, R10        ; Corrected word count
     MOV_IMM R1, 0x01   ; PRINT
     SYSCALL
+
+    MOV_IMM R0, 0x00        ; EXIT 0
     HALT
 
 MOV_IMM R0, 0x00
