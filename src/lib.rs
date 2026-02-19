@@ -41,7 +41,7 @@ pub enum Operation {
 
     // Load/Store [2-3]
     // Load: Destination is always a Register
-    LOAD = 0x20,     // [R], R
+    LOAD = 0x20,     // R, [R]
     LOAD_REL = 0x21, // [R + OFFSET], R
     LOAD_IMM = 0x22, // [IMM], R
 
