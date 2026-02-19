@@ -128,6 +128,7 @@ impl Assembler {
             "OR_IMM" => Some(Operation::OR_IMM),
             "XOR" => Some(Operation::XOR),
             "XOR_IMM" => Some(Operation::XOR_IMM),
+            "DIV_MOD" => Some(Operation::DIV_MOD),
             "SHL" => Some(Operation::SHL),
             "SHL_IMM" => Some(Operation::SHL_IMM),
             "SHR" => Some(Operation::SHR),

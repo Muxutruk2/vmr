@@ -68,6 +68,8 @@ pub enum Operation {
     XOR = 0x54,     // R, R
     XOR_IMM = 0x55, // R, IMM
 
+    DIV_MOD = 0x60, // R1 / R -> R0 % R1
+
     // Shifts [7]
     SHL = 0x70,     // R, R
     SHL_IMM = 0x71, // R, IMM
@@ -118,7 +120,8 @@ impl Operation {
             }
 
             // Single Operand: Register or Immediate
-            Operation::PUSH
+            Operation::DIV_MOD
+            | Operation::PUSH
             | Operation::PUSH_M
             | Operation::POP
             | Operation::POP_M

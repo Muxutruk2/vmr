@@ -379,6 +379,19 @@ impl VirtualMachine {
                 *self.get_reg_mut(r1)? ^= imm2;
                 None
             }
+
+            Operation::DIV_MOD => {
+                // R1 / R -> R0 % R1
+                let r1 = self.get_reg(Register::R1 as usize)?;
+                let r = self.get_reg(self.next_reg(1)?)?;
+
+                let quotient = r1.wrapping_div(r);
+                let remainder = r1 % r;
+
+                *self.get_reg_mut(Register::R0 as usize)? = quotient;
+                *self.get_reg_mut(Register::R1 as usize)? = remainder;
+                None
+            }
             Operation::SHL => {
                 let r1 = self.next_reg(1)?;
                 let r2 = self.next_reg(2)?;
@@ -581,7 +594,6 @@ impl VirtualMachine {
                             .checked_add(count)
                             .ok_or(RuntimeError::MemoryOOB)?;
 
-                        // 1. Safely get the slice of u16s
                         let u16_data = self
                             .memory
                             .get(print_addr..limit)
@@ -671,7 +683,6 @@ fn main() {
                 match e {
                     RuntimeError::Halted => {
                         debug!("{vm}");
-                        debug!("Program halted.");
                     }
                     _ => {
                         error!("{vm}");
