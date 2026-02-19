@@ -574,7 +574,29 @@ impl VirtualMachine {
                 let syscallnum = self.get_reg(Register::R1 as usize)?;
                 match syscallnum {
                     0x01 => {
-                        todo!("Print Syscall not implemented");
+                        let print_addr = self.get_reg(Register::R2 as usize)? as usize;
+                        let count = self.get_reg(Register::R3 as usize)? as usize;
+
+                        let limit = print_addr
+                            .checked_add(count)
+                            .ok_or(RuntimeError::MemoryOOB)?;
+
+                        // 1. Safely get the slice of u16s
+                        let u16_data = self
+                            .memory
+                            .get(print_addr..limit)
+                            .ok_or(RuntimeError::MemoryOOB)?;
+
+                        let corrected_bytes: Vec<u8> = u16_data
+                            .iter()
+                            .flat_map(|&word| word.to_be_bytes()) // Force Big-Endian order [0x48, 0x65]
+                            .collect();
+
+                        debug!("Printing from {print_addr:x} to {limit:x}");
+
+                        print!("{}", String::from_utf8_lossy(&corrected_bytes));
+
+                        None
                     }
                     _ => return Err(RuntimeError::InvalidSyscall),
                 }
