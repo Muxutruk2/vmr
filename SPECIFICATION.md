@@ -51,6 +51,14 @@ Addressed by one byte.
 
 - Untouched Registers: R10, R11, R12, R13, R14, R15.
 
+### Syscall
+
+- OPCODE: 0xFF
+
+- SYSCALL NUMBER: R1
+
+- R1 0x01 PRINT. R2 Address. R3 Number of bytes (1 byte = 16 bit)
+
 ## Virtual Machine
 
 Registers R0 - R15 contain 2 bytes each. 

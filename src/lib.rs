@@ -104,6 +104,8 @@ pub enum Operation {
     CALL = 0xD0,     // R
     CALL_IMM = 0xD1, // IMM
     RET = 0xD2,      // ()
+    //
+    SYSCALL = 0xFF,
 }
 
 impl Operation {
@@ -111,7 +113,9 @@ impl Operation {
     pub fn arg_type(&self) -> Arguments {
         match self {
             // Misc: 0 Operands
-            Operation::HALT | Operation::NOP | Operation::RET => Arguments::None,
+            Operation::HALT | Operation::NOP | Operation::RET | Operation::SYSCALL => {
+                Arguments::None
+            }
 
             // Single Operand: Register or Immediate
             Operation::PUSH

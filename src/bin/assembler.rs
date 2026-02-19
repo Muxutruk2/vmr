@@ -149,6 +149,7 @@ impl Assembler {
             "CALL" => Some(Operation::CALL),
             "CALL_IMM" => Some(Operation::CALL_IMM),
             "RET" => Some(Operation::RET),
+            "SYSCALL" => Some(Operation::SYSCALL),
             _ => None,
         }
     }

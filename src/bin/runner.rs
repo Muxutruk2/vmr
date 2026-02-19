@@ -87,6 +87,7 @@ pub enum RuntimeError {
     OffsetOOB,
     Halted,
     StackOverflow,
+    InvalidSyscall,
 }
 
 impl VirtualMachine {
@@ -568,6 +569,16 @@ impl VirtualMachine {
 
                 Some(ret_addr)
             }
+
+            Operation::SYSCALL => {
+                let syscallnum = self.get_reg(Register::R1 as usize)?;
+                match syscallnum {
+                    0x01 => {
+                        todo!("Print Syscall not implemented");
+                    }
+                    _ => return Err(RuntimeError::InvalidSyscall),
+                }
+            }
         };
 
         if let Some(addr) = new_addr {
@@ -656,6 +667,7 @@ fn main() {
         vm.get_reg(Register::R0 as usize).unwrap()
     );
 
+    // TODO: Modularize this
     let milisecond = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Time travel")
