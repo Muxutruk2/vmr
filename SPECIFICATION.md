@@ -8,20 +8,18 @@ After the code, any data.
 
 ## Instruction Format
 
-TODO: 
+OPCODE is 1 byte
 
-I'm thinking, before the OP code, encode what arguments it will need. 4 bits arguments, 4 bits opcode, the opcode can be reused, same opcode for mov_r_imm and mov_r_r
+Pipe (|) means boundary. Immediate is always 2 bytes.
 
-Pipe (|) means byte boundary
-
-Perhaps: 
 ```
-1 byte Argument Definition | 1 byte OPCODE
+1 byte OPCODE
          then nothing
          or REG
-         or REG | REG 
-         or REG | 2 bytes Immediate
-         or 2 bytes Immediate | REG
+         or REG       | REG 
+         or REG       | Immediate
+         or Immediate | REG
+         or REG       | Immediate | REG
 ```
 
 ### Argument Definition
