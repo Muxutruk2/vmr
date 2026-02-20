@@ -1,0 +1,17 @@
+EXPORT START:
+    MOV_IMM R1, 0x04
+    CALL_IMM .FIB
+    CMP_IMM R0, 0x08
+    JNE_IMM .ERROR
+
+    MOV_IMM R1, 0x04
+    CALL_IMM .DIV
+    CMP_IMM R0, 0x02
+    JNE_IMM .ERROR
+    
+    MOV_IMM R0, 0x00
+    HALT
+
+ERROR:
+    MOV_IMM R0, 0x01
+    HALT

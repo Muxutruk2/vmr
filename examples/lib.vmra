@@ -1,0 +1,12 @@
+EXPORT DIV:
+    MOV R8, R1
+    SHR_IMM R8, 0x01
+    MOV R0, R8
+    RET
+
+EXPORT MUL:
+    MOV R8, R1
+    SHL_IMM R8, 0x01
+    MOV R0, R8
+    RET
+

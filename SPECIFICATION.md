@@ -3,6 +3,7 @@
 ## File Format
 
 0x00 - 0x03 Magic Number: 0x76 0x6d 0x72
+0x04: 0x87 For Executable 0x6F For Object File
 x03 ... Code
 After the code, any data.
 

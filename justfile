@@ -5,5 +5,5 @@ assemble-all:
     for file in examples/*.vmra; do \
         filename=$(basename "$file" .vmra); \
         echo "Processing $filename..."; \
-        cargo run --quiet --release --bin assembler -- "$file" -o "bin/$filename.vmr"; \
+        cargo run --quiet --release --bin assembler -- "$file" -o "bin/$filename.vmro"; \
     done

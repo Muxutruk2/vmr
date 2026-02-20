@@ -642,15 +642,26 @@ impl VirtualMachine {
             .ok_or(RuntimeError::InstructionOOB)
     }
 
-    pub fn from_bytes(code: Vec<u8>, registers: Vec<u16>) -> Self {
-        VirtualMachine {
-            code: code.into_iter().skip(3).collect(),
+    pub fn from_bytes(code: Vec<u8>, registers: Vec<u16>) -> Result<Self, ExecutableError> {
+        match code.get(3) {
+            Some(0x78) => {}
+            Some(x) => return Err(ExecutableError::InvalidFlag(*x)),
+            None => return Err(ExecutableError::InvalidBinary),
+        }
+        Ok(VirtualMachine {
+            code: code.into_iter().skip(4).collect(),
             equal: false,
             memory: vec![0; 0xFFFF],
             current_instruction: 0,
             registers,
-        }
+        })
     }
+}
+
+#[derive(Debug)]
+enum ExecutableError {
+    InvalidFlag(u8),
+    InvalidBinary,
 }
 
 #[derive(clap::Parser)]
@@ -675,7 +686,8 @@ fn main() {
 
     *registers.get_mut(Register::RSP as usize).unwrap() = 0xFFFF;
 
-    let mut vm = VirtualMachine::from_bytes(code, registers);
+    let mut vm = VirtualMachine::from_bytes(code, registers).unwrap();
+
     loop {
         match vm.cycle() {
             Ok(_) => {}

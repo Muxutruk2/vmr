@@ -6,12 +6,16 @@ use std::path::PathBuf;
 
 pub struct Assembler {
     labels: HashMap<String, u16>,
+    pub relocations: Vec<(String, u16)>, // (Label Name, Bytecode Offset)
+    pub exports: Vec<(String, u16)>,     // (Label Name, Bytecode Offset)
 }
 
 impl Assembler {
     pub fn new() -> Self {
         Self {
             labels: HashMap::new(),
+            relocations: Vec::new(),
+            exports: Vec::new(),
         }
     }
 
@@ -24,7 +28,15 @@ impl Assembler {
                 continue;
             }
 
-            if line.ends_with(':') {
+            if line.starts_with("EXPORT") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(label_name) = parts.get(1) {
+                    if let Some(stripped) = label_name.rsplit_once(":") {
+                        self.exports.push((stripped.0.to_string(), pc));
+                    }
+                }
+                continue;
+            } else if line.ends_with(':') {
                 let label = line[..line.len() - 1].to_string();
                 self.labels.insert(label, pc);
             } else {
@@ -37,13 +49,27 @@ impl Assembler {
         }
     }
 
+    fn write_string(buffer: &mut Vec<u8>, s: &str) {
+        buffer.extend_from_slice(&(s.len() as u16).to_be_bytes());
+        buffer.extend_from_slice(s.as_bytes());
+    }
+
     /// Second Pass: Generate bytecode
     pub fn assemble(&mut self, input: &str) -> Result<Vec<u8>, String> {
         let lines: Vec<&str> = input.lines().collect();
+
         self.scan_labels(&lines);
 
         let mut bytecode = Vec::new();
-        bytecode.extend_from_slice(&[0x76, 0x6D, 0x72]);
+
+        let mut header = Vec::new();
+        header.extend_from_slice(b"vmro");
+
+        header.extend_from_slice(&(self.exports.len() as u16).to_be_bytes());
+        for (name, offset) in &self.exports {
+            Self::write_string(&mut header, name);
+            header.extend_from_slice(&offset.to_be_bytes());
+        }
 
         for (line_num, line) in lines.iter().enumerate() {
             let line = line.trim();
@@ -74,18 +100,22 @@ impl Assembler {
                     bytecode.push(self.parse_reg(parts[2])? as u8);
                 }
                 Arguments::RegImm => {
+                    let imm_pos2 = bytecode.len() as u16 + 1;
                     bytecode.push(self.parse_reg(parts[1])? as u8);
-                    let imm = self.resolve_value(parts[2])?;
+                    let imm = self.resolve_value(parts[2], imm_pos2)?;
                     bytecode.extend_from_slice(&imm.to_be_bytes()); // Big Endian
                 }
                 Arguments::Imm => {
-                    let imm = self.resolve_value(parts[1])?;
+                    let imm_pos = bytecode.len() as u16;
+                    let imm = self.resolve_value(parts[1], imm_pos)?;
                     bytecode.extend_from_slice(&imm.to_be_bytes());
                 }
                 Arguments::None => {}
                 Arguments::ImmImm => {
-                    let imm1 = self.resolve_value(parts[1])?;
-                    let imm2 = self.resolve_value(parts[2])?;
+                    let imm_pos1 = bytecode.len() as u16;
+                    let imm_pos2 = bytecode.len() as u16 + 1;
+                    let imm1 = self.resolve_value(parts[1], imm_pos1)?;
+                    let imm2 = self.resolve_value(parts[2], imm_pos2)?;
                     bytecode.extend_from_slice(&imm1.to_be_bytes());
                     bytecode.extend_from_slice(&imm2.to_be_bytes());
                 }
@@ -93,14 +123,25 @@ impl Assembler {
                     todo!("RegImmReg OpCodes are not supported")
                 }
                 Arguments::ImmReg => {
-                    let imm = self.resolve_value(parts[1])?;
+                    let imm_pos1 = bytecode.len() as u16;
+                    let imm = self.resolve_value(parts[1], imm_pos1)?;
                     bytecode.extend_from_slice(&imm.to_be_bytes());
                     bytecode.push(self.parse_reg(parts[2])? as u8);
                 }
             }
         }
 
-        Ok(bytecode)
+        let mut reloc_section = Vec::new();
+        reloc_section.extend_from_slice(&(self.relocations.len() as u16).to_be_bytes());
+        for (name, offset) in &self.relocations {
+            Self::write_string(&mut reloc_section, name);
+            reloc_section.extend_from_slice(&offset.to_be_bytes());
+        }
+        let mut final_output = header;
+        final_output.extend_from_slice(&reloc_section);
+        final_output.extend_from_slice(&bytecode);
+
+        Ok(final_output)
     }
 
     fn parse_op(&self, s: &str) -> Option<Operation> {
@@ -178,15 +219,19 @@ impl Assembler {
         }
     }
 
-    fn resolve_value(&self, s: &str) -> Result<u16, String> {
-        // Check if it's a label
-        if let Some(&addr) = self.labels.get(s) {
-            return Ok(addr);
-        }
-        // Otherwise try to parse as hex or dec
-        if s.starts_with("0x") {
+    fn resolve_value(&mut self, s: &str, imm_pos: u16) -> Result<u16, String> {
+        if s.starts_with(".") {
+            let label_name = &s[1..];
+
+            self.relocations.push((label_name.to_string(), imm_pos));
+
+            // The linker will later do: FinalAddr = Base + 0x0030
+            return Ok(*self.labels.get(label_name).unwrap_or(&0x0000));
+        } else if s.starts_with("0x") {
+            // Hex
             u16::from_str_radix(&s[2..], 16).map_err(|_| format!("Invalid hex: {}", s))
         } else {
+            // Decimal
             s.parse::<u16>()
                 .map_err(|_| format!("Invalid literal: {}", s))
         }
@@ -209,6 +254,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+    env_logger::builder().format_timestamp(None).init();
 
     let input_content = match fs::read_to_string(&args.input) {
         Ok(content) => content,
