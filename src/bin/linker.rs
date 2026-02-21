@@ -1,14 +1,5 @@
 use std::collections::HashMap;
 
-#[allow(dead_code)]
-struct ObjectFile {
-    name: String,
-    // local_symbols: HashMap<String, u16>,
-    relocations: Vec<(String, u16)>,
-    bytecode: Vec<u8>,
-    base_address: u16,
-}
-
 pub struct Linker {
     objects: Vec<ObjectFile>,
     global_symbols: HashMap<String, u16>,
@@ -30,8 +21,6 @@ impl Linker {
 
     /// Stage 1: Parse the .vmo bytes and track the global base address
     pub fn load_object(&mut self, name: &str, data: &[u8]) {
-        let mut cursor = 4; // Skip "vmro"
-
         // Calculate current base address (end of the previous file)
         let base_address = self
             .objects
@@ -39,16 +28,10 @@ impl Linker {
             .map(|obj| obj.bytecode.len() as u16)
             .sum();
 
-        // Parse Exports
-        let export_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-        cursor += 2;
-        for _ in 0..export_count {
-            let (label, bytes_read) = self.read_string(&data[cursor..]);
-            cursor += bytes_read;
-            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-            cursor += 2;
+        let object = ObjectFile::from_binary(data, name, base_address);
 
-            if self.global_symbols.contains_key(&label) {
+        for (label, offset) in object.exports.iter() {
+            if self.global_symbols.contains_key(label) {
                 println!("WARNING Label {label} is redefined by {name}");
             }
 
@@ -56,26 +39,7 @@ impl Linker {
                 .insert(label.clone(), base_address + offset);
         }
 
-        // Parse Relocations
-        let reloc_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-        cursor += 2;
-        let mut relocations = Vec::new();
-        for _ in 0..reloc_count {
-            let (label, bytes_read) = self.read_string(&data[cursor..]);
-            cursor += bytes_read;
-            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-            cursor += 2;
-            relocations.push((label, offset));
-        }
-
-        let bytecode = data[cursor..].to_vec();
-
-        self.objects.push(ObjectFile {
-            name: name.to_string(),
-            relocations,
-            bytecode,
-            base_address,
-        });
+        self.objects.push(object);
     }
 
     /// Stage 2 & 3: Patch placeholders and merge into one .vmr
@@ -91,26 +55,32 @@ impl Linker {
         }
 
         for obj in &mut self.objects {
-            for (label, reloc_offset) in &obj.relocations {
+            for reloc_offset in &obj.internal_relocations {
                 let idx = *reloc_offset as usize;
 
-                // Existing addend from bytecode (Big Endian)
                 let existing_addend =
                     u16::from_be_bytes([obj.bytecode[idx], obj.bytecode[idx + 1]]);
 
-                let final_addr = if label == "@LOCAL" {
-                    existing_addend + obj.base_address
-                } else {
-                    let global_symbol_addr = self.global_symbols.get(label).ok_or(format!(
-                        "Linker Error: Undefined symbol '{}' in {}",
-                        label, obj.name
-                    ))?;
+                let final_addr = existing_addend + obj.base_address;
 
-                    existing_addend + *global_symbol_addr
-                };
+                debug!("Patched local relocation: {existing_addend:04x} -> {final_addr:04x}");
 
-                // 4. Write back the patched address
                 let patched_bytes = final_addr.to_be_bytes();
+                obj.bytecode[idx] = patched_bytes[0];
+                obj.bytecode[idx + 1] = patched_bytes[1];
+            }
+
+            for (label, reloc_offset) in &obj.external_relocations {
+                let idx = *reloc_offset as usize;
+
+                let final_addr = *self.global_symbols.get(label).ok_or(format!(
+                    "Linker Error: Undefined symbol '{}' in {}",
+                    label, obj.name
+                ))?;
+
+                let patched_bytes = final_addr.to_be_bytes();
+
+                debug!("Patched external relocation: {final_addr:04x}");
                 obj.bytecode[idx] = patched_bytes[0];
                 obj.bytecode[idx + 1] = patched_bytes[1];
             }
@@ -125,15 +95,11 @@ impl Linker {
 
         Ok(output)
     }
-
-    fn read_string(&self, data: &[u8]) -> (String, usize) {
-        let len = u16::from_be_bytes([data[0], data[1]]) as usize;
-        let s = String::from_utf8_lossy(&data[2..2 + len]).to_string();
-        (s, len + 2)
-    }
 }
 
 use clap::Parser;
+use libvmr::ObjectFile;
+use log::debug;
 use std::fs;
 use std::path::PathBuf;
 

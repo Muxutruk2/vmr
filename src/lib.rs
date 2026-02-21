@@ -1,3 +1,5 @@
+use std::{collections::HashMap, fmt::Display};
+
 #[macro_use]
 extern crate num_derive;
 
@@ -203,5 +205,140 @@ impl Arguments {
             Arguments::RegImmReg => 5,
             Arguments::ImmReg => 4,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct ObjectFile {
+    pub name: String,
+    pub internal_relocations: Vec<u16>,
+    pub external_relocations: Vec<(String, u16)>,
+    pub labels: HashMap<String, u16>,
+    pub exports: Vec<(String, u16)>,
+    pub bytecode: Vec<u8>,
+    pub base_address: u16,
+}
+
+impl ObjectFile {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            internal_relocations: Vec::new(),
+            external_relocations: Vec::new(),
+            exports: Vec::new(),
+            labels: HashMap::new(),
+            bytecode: Vec::new(),
+            base_address: 0,
+        }
+    }
+
+    pub fn to_binary(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        out.extend_from_slice(b"vmro");
+
+        out.extend_from_slice(&(self.exports.len() as u16).to_be_bytes());
+
+        for (name, offset) in &self.exports {
+            Self::write_string(&mut out, name);
+            out.extend_from_slice(&offset.to_be_bytes());
+        }
+
+        out.extend_from_slice(&(self.external_relocations.len() as u16).to_be_bytes());
+        for (label, address) in &self.external_relocations {
+            Self::write_string(&mut out, label);
+            out.extend_from_slice(&address.to_be_bytes());
+        }
+
+        out.extend_from_slice(&(self.internal_relocations.len() as u16).to_be_bytes());
+        for address in &self.internal_relocations {
+            out.extend_from_slice(&address.to_be_bytes());
+        }
+
+        out.extend_from_slice(&self.bytecode);
+
+        out
+    }
+
+    pub fn from_binary(data: &[u8], name: &str, base_address: u16) -> Self {
+        let mut cursor = 4; // Skip "vmro"
+
+        // Parse Exports
+        let export_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
+        let mut exports = Vec::with_capacity(export_count as usize);
+        cursor += 2;
+        for _ in 0..export_count {
+            let (label, bytes_read) = Self::read_string(&data[cursor..]);
+            cursor += bytes_read;
+            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
+            cursor += 2;
+
+            exports.push((label.clone(), offset));
+        }
+
+        // External Relocations
+        let external_relocation_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
+        let mut external_relocations = Vec::with_capacity(external_relocation_count as usize);
+        cursor += 2;
+        for _ in 0..external_relocation_count {
+            let (label, bytes_read) = Self::read_string(&data[cursor..]);
+            cursor += bytes_read;
+            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
+            cursor += 2;
+
+            external_relocations.push((label.clone(), offset));
+        }
+
+        // Local Relocations
+        let internal_relocation_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
+        cursor += 2;
+        let mut internal_relocations: Vec<u16> =
+            Vec::with_capacity(internal_relocation_count as usize);
+        for _ in 0..internal_relocation_count {
+            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
+            cursor += 2;
+            internal_relocations.push(offset);
+        }
+
+        let bytecode = data[cursor..].to_vec();
+
+        ObjectFile {
+            name: name.to_string(),
+            exports,
+            labels: HashMap::new(),
+            bytecode,
+            internal_relocations,
+            external_relocations,
+            base_address,
+        }
+    }
+
+    fn write_string(buffer: &mut Vec<u8>, s: &str) {
+        buffer.extend_from_slice(&(s.len() as u16).to_be_bytes());
+        buffer.extend_from_slice(s.as_bytes());
+    }
+    fn read_string(data: &[u8]) -> (String, usize) {
+        let len = u16::from_be_bytes([data[0], data[1]]) as usize;
+        let s = String::from_utf8_lossy(&data[2..2 + len]).to_string();
+        (s, len + 2)
+    }
+}
+
+impl Display for ObjectFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        writeln!(f, "\t\"name\": \"{}\",", self.name)?;
+        writeln!(f, "\t\"exports\": {:02x?},", self.exports)?;
+        writeln!(f, "\t\"internal\": {:02x?},", self.internal_relocations)?;
+        writeln!(f, "\t\"external\": {:02x?},", self.external_relocations)?;
+        writeln!(f, "\t\"labels\": {:02x?},", self.labels)?;
+        writeln!(f, "\t\"base_address\": {:02x?}", self.base_address)?;
+        // write!(f, "\t\"bytecode\": \"")?;
+        // for byte in self.bytecode.iter() {
+        //     write!(f, "{byte:02x} ")?;
+        // }
+        // writeln!(f, "\"")?;
+        writeln!(f, "}}")?;
+        Ok(())
     }
 }

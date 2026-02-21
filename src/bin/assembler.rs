@@ -1,14 +1,10 @@
 use clap::Parser;
 use libvmr::*;
-use std::collections::HashMap;
+use log::debug;
 use std::fs;
 use std::path::PathBuf;
 
-pub struct Assembler {
-    labels: HashMap<String, u16>,
-    pub relocations: Vec<(String, u16)>, // (Label Name, Bytecode Offset)
-    pub exports: Vec<(String, u16)>,     // (Label Name, Bytecode Offset)
-}
+pub struct Assembler {}
 
 impl Default for Assembler {
     fn default() -> Self {
@@ -18,15 +14,11 @@ impl Default for Assembler {
 
 impl Assembler {
     pub fn new() -> Self {
-        Self {
-            labels: HashMap::new(),
-            relocations: Vec::new(),
-            exports: Vec::new(),
-        }
+        Self {}
     }
 
     /// First Pass: Determine the address of every label
-    fn scan_labels(&mut self, lines: &[&str]) {
+    fn scan_labels(&self, lines: &[&str], objfile: &mut ObjectFile) {
         let mut pc: u16 = 0;
         for line in lines {
             let line = line.trim();
@@ -34,16 +26,13 @@ impl Assembler {
                 continue;
             }
 
-            if line.starts_with("EXPORT") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(label_name) = parts.get(1)
-                    && let Some(stripped) = label_name.rsplit_once(":")
-                {
-                    self.exports.push((stripped.0.to_string(), pc));
+            if let Some(label_str) = line.strip_prefix("EXPORT") {
+                if let Some(label_name) = label_str.strip_suffix(':').map(str::trim) {
+                    objfile.exports.push((label_name.to_string(), pc));
                 }
                 continue;
             } else if let Some(label_name) = line.strip_suffix(':') {
-                self.labels.insert(label_name.to_string(), pc);
+                objfile.labels.insert(label_name.to_string(), pc);
             } else {
                 // Parse the opcode to determine how many bytes this instruction takes
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -54,27 +43,13 @@ impl Assembler {
         }
     }
 
-    fn write_string(buffer: &mut Vec<u8>, s: &str) {
-        buffer.extend_from_slice(&(s.len() as u16).to_be_bytes());
-        buffer.extend_from_slice(s.as_bytes());
-    }
-
     /// Second Pass: Generate bytecode
-    pub fn assemble(&mut self, input: &str) -> Result<Vec<u8>, String> {
+    pub fn assemble(&mut self, input: &str, name: &str) -> Result<ObjectFile, String> {
+        let mut objfile = ObjectFile::new(name.to_string());
+
         let lines: Vec<&str> = input.lines().collect();
 
-        self.scan_labels(&lines);
-
-        let mut bytecode = Vec::new();
-
-        let mut header = Vec::new();
-        header.extend_from_slice(b"vmro");
-
-        header.extend_from_slice(&(self.exports.len() as u16).to_be_bytes());
-        for (name, offset) in &self.exports {
-            Self::write_string(&mut header, name);
-            header.extend_from_slice(&offset.to_be_bytes());
-        }
+        self.scan_labels(&lines, &mut objfile);
 
         for (line_num, line) in lines.iter().enumerate() {
             let line = line.trim();
@@ -90,60 +65,50 @@ impl Assembler {
                 parts[0]
             ))?;
 
-            bytecode.push(op as u8);
+            objfile.bytecode.push(op as u8);
 
             // Encode arguments based on the arg_type
             match op.arg_type() {
                 Arguments::Reg => {
-                    bytecode.push(self.parse_reg(parts[1])? as u8);
+                    objfile.bytecode.push(self.parse_reg(parts[1])? as u8);
                 }
                 Arguments::RegReg => {
-                    bytecode.push(self.parse_reg(parts[1])? as u8);
-                    bytecode.push(self.parse_reg(parts[2])? as u8);
+                    objfile.bytecode.push(self.parse_reg(parts[1])? as u8);
+                    objfile.bytecode.push(self.parse_reg(parts[2])? as u8);
                 }
                 Arguments::RegImm => {
-                    let imm_pos2 = bytecode.len() as u16 + 1;
-                    bytecode.push(self.parse_reg(parts[1])? as u8);
-                    let imm = self.resolve_value(parts[2], imm_pos2)?;
-                    bytecode.extend_from_slice(&imm.to_be_bytes()); // Big Endian
+                    let imm_pos2 = objfile.bytecode.len() as u16 + 1;
+                    objfile.bytecode.push(self.parse_reg(parts[1])? as u8);
+                    let imm = Self::resolve_value(&mut objfile, parts[2], imm_pos2)?;
+                    objfile.bytecode.extend_from_slice(&imm.to_be_bytes()); // Big Endian
                 }
                 Arguments::Imm => {
-                    let imm_pos = bytecode.len() as u16;
-                    let imm = self.resolve_value(parts[1], imm_pos)?;
-                    bytecode.extend_from_slice(&imm.to_be_bytes());
+                    let imm_pos = objfile.bytecode.len() as u16;
+                    let imm = Self::resolve_value(&mut objfile, parts[1], imm_pos)?;
+                    objfile.bytecode.extend_from_slice(&imm.to_be_bytes());
                 }
                 Arguments::None => {}
                 Arguments::ImmImm => {
-                    let imm_pos1 = bytecode.len() as u16;
-                    let imm_pos2 = bytecode.len() as u16 + 1;
-                    let imm1 = self.resolve_value(parts[1], imm_pos1)?;
-                    let imm2 = self.resolve_value(parts[2], imm_pos2)?;
-                    bytecode.extend_from_slice(&imm1.to_be_bytes());
-                    bytecode.extend_from_slice(&imm2.to_be_bytes());
+                    let imm_pos1 = objfile.bytecode.len() as u16;
+                    let imm_pos2 = objfile.bytecode.len() as u16 + 1;
+                    let imm1 = Self::resolve_value(&mut objfile, parts[1], imm_pos1)?;
+                    let imm2 = Self::resolve_value(&mut objfile, parts[2], imm_pos2)?;
+                    objfile.bytecode.extend_from_slice(&imm1.to_be_bytes());
+                    objfile.bytecode.extend_from_slice(&imm2.to_be_bytes());
                 }
                 Arguments::RegImmReg => {
                     todo!("RegImmReg OpCodes are not supported")
                 }
                 Arguments::ImmReg => {
-                    let imm_pos1 = bytecode.len() as u16;
-                    let imm = self.resolve_value(parts[1], imm_pos1)?;
-                    bytecode.extend_from_slice(&imm.to_be_bytes());
-                    bytecode.push(self.parse_reg(parts[2])? as u8);
+                    let imm_pos1 = objfile.bytecode.len() as u16;
+                    let imm = Self::resolve_value(&mut objfile, parts[1], imm_pos1)?;
+                    objfile.bytecode.extend_from_slice(&imm.to_be_bytes());
+                    objfile.bytecode.push(self.parse_reg(parts[2])? as u8);
                 }
             }
         }
 
-        let mut reloc_section = Vec::new();
-        reloc_section.extend_from_slice(&(self.relocations.len() as u16).to_be_bytes());
-        for (name, offset) in &self.relocations {
-            Self::write_string(&mut reloc_section, name);
-            reloc_section.extend_from_slice(&offset.to_be_bytes());
-        }
-        let mut final_output = header;
-        final_output.extend_from_slice(&reloc_section);
-        final_output.extend_from_slice(&bytecode);
-
-        Ok(final_output)
+        Ok(objfile)
     }
 
     fn parse_op(&self, s: &str) -> Option<Operation> {
@@ -221,15 +186,17 @@ impl Assembler {
         }
     }
 
-    fn resolve_value(&mut self, s: &str, imm_pos: u16) -> Result<u16, String> {
-        if let Some(label_name) = s.strip_prefix(".") {
-            if let Some(&local_offset) = self.labels.get(label_name) {
+    fn resolve_value(objfile: &mut ObjectFile, s: &str, imm_pos: u16) -> Result<u16, String> {
+        if let Some(label_name) = s.strip_prefix(".").map(str::trim) {
+            if let Some(&local_offset) = objfile.labels.get(label_name) {
                 // Local label
-                self.relocations.push(("@LOCAL".to_string(), imm_pos));
+                objfile.internal_relocations.push(imm_pos);
                 Ok(local_offset)
             } else {
                 // Foreign label
-                self.relocations.push((label_name.to_string(), imm_pos));
+                objfile
+                    .external_relocations
+                    .push((label_name.to_string(), imm_pos));
                 Ok(0)
             }
         } else if let Some(hex_str) = s.strip_prefix("0x") {
@@ -273,9 +240,13 @@ fn main() {
 
     let mut assembler = Assembler::new();
 
-    match assembler.assemble(&input_content) {
-        Ok(binary) => {
-            if let Err(e) = fs::write(&args.output, binary) {
+    match assembler.assemble(
+        &input_content,
+        args.input.file_stem().and_then(|s| s.to_str()).unwrap(),
+    ) {
+        Ok(objfile) => {
+            debug!("ObjectFile: {objfile}");
+            if let Err(e) = fs::write(&args.output, objfile.to_binary()) {
                 eprintln!("Error writing to output file {:?}: {}", args.output, e);
                 std::process::exit(1);
             }
