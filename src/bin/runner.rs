@@ -29,7 +29,9 @@ impl std::fmt::Display for VirtualMachine {
         for byte in self.code.iter() {
             write!(f, "{byte:02x} ")?;
         }
+
         writeln!(f, "\nInstruction Address: {:04x}", self.current_instruction)?;
+
         match self.code.get(self.current_instruction as usize) {
             Some(n) => {
                 writeln!(f, "Instruction Byte: {:02x}", n)?;
@@ -49,7 +51,6 @@ impl std::fmt::Display for VirtualMachine {
         }
 
         let rsp = self.get_reg(Register::RSP as usize).unwrap_or(0) as isize;
-        let memory_len = self.memory.len() as isize;
 
         writeln!(f, "Stack Dump:")?;
 
@@ -61,15 +62,15 @@ impl std::fmt::Display for VirtualMachine {
         writeln!(f, "{} ↓RSP", indent)?;
 
         for offset in range {
-            let target_idx = rsp + offset;
+            let target_idx = rsp
+                .checked_add(offset)
+                .expect("Reading the stack resulted on ");
 
-            if target_idx >= 0 && target_idx < memory_len {
-                // Access valid memory
-                let val = self.memory[target_idx as usize];
+            if let Some(val) = self.memory.get(target_idx as usize) {
                 write!(f, "{:#06x} ", val)?;
             } else {
                 // Out of bounds placeholder
-                write!(f, "  __   ")?;
+                write!(f, "______ ")?;
             }
         }
 
@@ -88,6 +89,7 @@ pub enum RuntimeError {
     Halted,
     StackOverflow,
     InvalidSyscall,
+    DivisionByZero,
 }
 
 impl VirtualMachine {
@@ -385,8 +387,12 @@ impl VirtualMachine {
                 let r1 = self.get_reg(Register::R1 as usize)?;
                 let r = self.get_reg(self.next_reg(1)?)?;
 
-                let quotient = r1.wrapping_div(r);
-                let remainder = r1 % r;
+                if r == 0 {
+                    return Err(RuntimeError::DivisionByZero);
+                }
+
+                let quotient = r1.checked_div(r).ok_or(RuntimeError::DivisionByZero)?;
+                let remainder = r1.checked_rem(r).ok_or(RuntimeError::DivisionByZero)?;
 
                 *self.get_reg_mut(Register::R0 as usize)? = quotient;
                 *self.get_reg_mut(Register::R1 as usize)? = remainder;

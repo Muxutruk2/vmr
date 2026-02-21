@@ -10,6 +10,12 @@ pub struct Assembler {
     pub exports: Vec<(String, u16)>,     // (Label Name, Bytecode Offset)
 }
 
+impl Default for Assembler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Assembler {
     pub fn new() -> Self {
         Self {
@@ -30,15 +36,14 @@ impl Assembler {
 
             if line.starts_with("EXPORT") {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(label_name) = parts.get(1) {
-                    if let Some(stripped) = label_name.rsplit_once(":") {
-                        self.exports.push((stripped.0.to_string(), pc));
-                    }
+                if let Some(label_name) = parts.get(1)
+                    && let Some(stripped) = label_name.rsplit_once(":")
+                {
+                    self.exports.push((stripped.0.to_string(), pc));
                 }
                 continue;
-            } else if line.ends_with(':') {
-                let label = line[..line.len() - 1].to_string();
-                self.labels.insert(label, pc);
+            } else if let Some(label_name) = line.strip_suffix(':') {
+                self.labels.insert(label_name.to_string(), pc);
             } else {
                 // Parse the opcode to determine how many bytes this instruction takes
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -77,10 +82,7 @@ impl Assembler {
                 continue;
             }
 
-            let parts: Vec<&str> = line
-                .split(|c: char| c == ' ' || c == ',')
-                .filter(|s| !s.is_empty())
-                .collect();
+            let parts: Vec<&str> = line.split([' ', ',']).filter(|s| !s.is_empty()).collect();
 
             let op = self.parse_op(parts[0]).ok_or(format!(
                 "Line {}: Unknown opcode {}",
@@ -220,23 +222,19 @@ impl Assembler {
     }
 
     fn resolve_value(&mut self, s: &str, imm_pos: u16) -> Result<u16, String> {
-        if s.starts_with(".") {
-            let label_name = &s[1..];
-
+        if let Some(label_name) = s.strip_prefix(".") {
             if let Some(&local_offset) = self.labels.get(label_name) {
                 // Local label
                 self.relocations.push(("@LOCAL".to_string(), imm_pos));
-                return Ok(local_offset);
+                Ok(local_offset)
             } else {
                 // Foreign label
                 self.relocations.push((label_name.to_string(), imm_pos));
-                return Ok(0);
+                Ok(0)
             }
-        } else if s.starts_with("0x") {
-            // Hex
-            u16::from_str_radix(&s[2..], 16).map_err(|_| format!("Invalid hex: {}", s))
+        } else if let Some(hex_str) = s.strip_prefix("0x") {
+            u16::from_str_radix(hex_str, 16).map_err(|_| format!("Invalid hex: {}", s))
         } else {
-            // Decimal
             s.parse::<u16>()
                 .map_err(|_| format!("Invalid literal: {}", s))
         }

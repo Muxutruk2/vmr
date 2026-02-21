@@ -14,6 +14,12 @@ pub struct Linker {
     global_symbols: HashMap<String, u16>,
 }
 
+impl Default for Linker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Linker {
     pub fn new() -> Self {
         Self {
@@ -85,8 +91,6 @@ impl Linker {
         }
 
         for obj in &mut self.objects {
-            let obj_base = obj.base_address; // The start of this file in the final binary
-
             for (label, reloc_offset) in &obj.relocations {
                 let idx = *reloc_offset as usize;
 
@@ -130,7 +134,6 @@ impl Linker {
 }
 
 use clap::Parser;
-use log::debug;
 use std::fs;
 use std::path::PathBuf;
 
