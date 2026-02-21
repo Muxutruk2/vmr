@@ -645,7 +645,7 @@ impl VirtualMachine {
     pub fn from_bytes(code: Vec<u8>, registers: Vec<u16>) -> Result<Self, ExecutableError> {
         match code.get(3) {
             Some(0x78) => {}
-            Some(x) => return Err(ExecutableError::InvalidFlag(*x)),
+            Some(_) => return Err(ExecutableError::InvalidFlag),
             None => return Err(ExecutableError::InvalidBinary),
         }
         Ok(VirtualMachine {
@@ -660,7 +660,7 @@ impl VirtualMachine {
 
 #[derive(Debug)]
 enum ExecutableError {
-    InvalidFlag(u8),
+    InvalidFlag,
     InvalidBinary,
 }
 
