@@ -12,6 +12,7 @@ devenv.local.yaml
 .pre-commit-config.yaml
 
 *.vmr
+*.vmro
 
 dumps
 
