@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 struct ObjectFile {
     name: String,
-    exports: HashMap<String, u16>,
+    // local_symbols: HashMap<String, u16>,
     relocations: Vec<(String, u16)>,
     bytecode: Vec<u8>,
     base_address: u16,
@@ -35,16 +36,18 @@ impl Linker {
         // Parse Exports
         let export_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
         cursor += 2;
-        let mut exports = HashMap::new();
         for _ in 0..export_count {
             let (label, bytes_read) = self.read_string(&data[cursor..]);
             cursor += bytes_read;
             let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
             cursor += 2;
-            // Map local offset to Global Address
+
+            if self.global_symbols.contains_key(&label) {
+                println!("WARNING Label {label} is redefined by {name}");
+            }
+
             self.global_symbols
                 .insert(label.clone(), base_address + offset);
-            exports.insert(label, offset);
         }
 
         // Parse Relocations
@@ -63,7 +66,6 @@ impl Linker {
 
         self.objects.push(ObjectFile {
             name: name.to_string(),
-            exports,
             relocations,
             bytecode,
             base_address,
@@ -83,56 +85,38 @@ impl Linker {
         }
 
         for obj in &mut self.objects {
-            for (label, offset) in &obj.relocations {
-                debug!(
-                    "Symbol {label} at offset {offset:x} requested by {}",
-                    obj.name
-                );
+            let obj_base = obj.base_address; // The start of this file in the final binary
 
-                // Find the symbol in the global map.
-                // This map contains (Object_Base_Address + Local_Label_Offset)
-                let global_addr = self.global_symbols.get(label).ok_or(format!(
-                    "Linker Error: Undefined symbol '{}' requested by {}",
-                    label, obj.name
-                ))?;
+            for (label, reloc_offset) in &obj.relocations {
+                let idx = *reloc_offset as usize;
 
-                debug!("Global_addr: {global_addr:x}");
+                // Existing addend from bytecode (Big Endian)
+                let existing_addend =
+                    u16::from_be_bytes([obj.bytecode[idx], obj.bytecode[idx + 1]]);
 
-                let addr_bytes = global_addr.to_be_bytes();
-                let idx = *offset as usize;
+                let final_addr = if label == "@LOCAL" {
+                    existing_addend + obj.base_address
+                } else {
+                    let global_symbol_addr = self.global_symbols.get(label).ok_or(format!(
+                        "Linker Error: Undefined symbol '{}' in {}",
+                        label, obj.name
+                    ))?;
 
-                // SAFETY: Ensure the relocation offset is actually within this object's bytecode
-                if idx + 1 >= obj.bytecode.len() {
-                    return Err(format!(
-                        "Linker Error: Relocation offset {} out of bounds in {}",
-                        idx, obj.name
-                    ));
-                }
+                    existing_addend + *global_symbol_addr
+                };
 
-                debug!(
-                    "Current address: {:x}{:x}",
-                    obj.bytecode[idx],
-                    obj.bytecode[idx + 1]
-                );
-
-                // UNIFIED PATCH:
-                // If local: overwrites local offset (e.g., 0x0030) with global (e.g., 0x1030)
-                // If foreign: overwrites 0x0000 with global (e.g., 0x0500)
-                obj.bytecode[idx] = addr_bytes[0];
-                obj.bytecode[idx + 1] = addr_bytes[1];
-
-                debug!(
-                    "Patched address: {:x}{:x}",
-                    obj.bytecode[idx],
-                    obj.bytecode[idx + 1]
-                );
+                // 4. Write back the patched address
+                let patched_bytes = final_addr.to_be_bytes();
+                obj.bytecode[idx] = patched_bytes[0];
+                obj.bytecode[idx + 1] = patched_bytes[1];
             }
-
-            final_bytecode.extend_from_slice(&obj.bytecode);
         }
 
-        // 3. Final Executable Construction
-        let mut output = b"vmrx".to_vec(); // 'x' for executable
+        for obj in self.objects {
+            final_bytecode.extend(obj.bytecode);
+        }
+
+        let mut output = b"vmrx".to_vec();
         output.extend_from_slice(&final_bytecode);
 
         Ok(output)

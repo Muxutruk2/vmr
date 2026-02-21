@@ -223,10 +223,15 @@ impl Assembler {
         if s.starts_with(".") {
             let label_name = &s[1..];
 
-            self.relocations.push((label_name.to_string(), imm_pos));
-
-            // The linker will later do: FinalAddr = Base + 0x0030
-            return Ok(*self.labels.get(label_name).unwrap_or(&0x0000));
+            if let Some(&local_offset) = self.labels.get(label_name) {
+                // Local label
+                self.relocations.push(("@LOCAL".to_string(), imm_pos));
+                return Ok(local_offset);
+            } else {
+                // Foreign label
+                self.relocations.push((label_name.to_string(), imm_pos));
+                return Ok(0);
+            }
         } else if s.starts_with("0x") {
             // Hex
             u16::from_str_radix(&s[2..], 16).map_err(|_| format!("Invalid hex: {}", s))
