@@ -3,6 +3,7 @@ use libvmr::*;
 use log::debug;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 pub struct Assembler {}
 
@@ -36,7 +37,7 @@ impl Assembler {
             } else {
                 // Parse the opcode to determine how many bytes this instruction takes
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(op) = self.parse_op(parts[0]) {
+                if let Ok(op) = Operation::from_str(parts[0]) {
                     pc += op.arg_type().to_offset() as u16;
                 }
             }
@@ -59,11 +60,8 @@ impl Assembler {
 
             let parts: Vec<&str> = line.split([' ', ',']).filter(|s| !s.is_empty()).collect();
 
-            let op = self.parse_op(parts[0]).ok_or(format!(
-                "Line {}: Unknown opcode {}",
-                line_num + 1,
-                parts[0]
-            ))?;
+            let op = Operation::from_str(parts[0])
+                .map_err(|_| format!("Line {}: Unknown opcode {}", line_num + 1, parts[0]))?;
 
             objfile.bytecode.push(op as u8);
 
@@ -109,58 +107,6 @@ impl Assembler {
         }
 
         Ok(objfile)
-    }
-
-    fn parse_op(&self, s: &str) -> Option<Operation> {
-        match s.to_uppercase().as_str() {
-            "HALT" => Some(Operation::HALT),
-            "NOP" => Some(Operation::NOP),
-            "MOV" => Some(Operation::MOV),
-            "MOV_IMM" => Some(Operation::MOV_IMM),
-            "LOAD" => Some(Operation::LOAD),
-            "LOAD_REL" => Some(Operation::LOAD_REL),
-            "LOAD_IMM" => Some(Operation::LOAD_IMM),
-            "STORE_R_R" => Some(Operation::STORE_R_R),
-            "STORE_REL_R" => Some(Operation::STORE_REL_R),
-            "STORE_IMM_R" => Some(Operation::STORE_IMM_R),
-            "STORE_R_IMM" => Some(Operation::STORE_R_IMM),
-            "STORE_REL_IMM" => Some(Operation::STORE_REL_IMM),
-            "STORE_IMM_IMM" => Some(Operation::STORE_IMM_IMM),
-            "ADD" => Some(Operation::ADD),
-            "ADD_IMM" => Some(Operation::ADD_IMM),
-            "SUB" => Some(Operation::SUB),
-            "SUB_IMM" => Some(Operation::SUB_IMM),
-            "AND" => Some(Operation::AND),
-            "AND_IMM" => Some(Operation::AND_IMM),
-            "OR" => Some(Operation::OR),
-            "OR_IMM" => Some(Operation::OR_IMM),
-            "XOR" => Some(Operation::XOR),
-            "XOR_IMM" => Some(Operation::XOR_IMM),
-            "DIV_MOD" => Some(Operation::DIV_MOD),
-            "SHL" => Some(Operation::SHL),
-            "SHL_IMM" => Some(Operation::SHL_IMM),
-            "SHR" => Some(Operation::SHR),
-            "SHR_IMM" => Some(Operation::SHR_IMM),
-            "CMP" => Some(Operation::CMP),
-            "CMP_IMM" => Some(Operation::CMP_IMM),
-            "PUSH" => Some(Operation::PUSH),
-            "PUSH_M" => Some(Operation::PUSH_M),
-            "PUSH_IMM" => Some(Operation::PUSH_IMM),
-            "POP" => Some(Operation::POP),
-            "POP_M" => Some(Operation::POP_M),
-            "POP_IMM" => Some(Operation::POP_IMM),
-            "JMP" => Some(Operation::JMP),
-            "JMP_IMM" => Some(Operation::JMP_IMM),
-            "JE" => Some(Operation::JE),
-            "JE_IMM" => Some(Operation::JE_IMM),
-            "JNE" => Some(Operation::JNE),
-            "JNE_IMM" => Some(Operation::JNE_IMM),
-            "CALL" => Some(Operation::CALL),
-            "CALL_IMM" => Some(Operation::CALL_IMM),
-            "RET" => Some(Operation::RET),
-            "SYSCALL" => Some(Operation::SYSCALL),
-            _ => None,
-        }
     }
 
     fn parse_reg(&self, s: &str) -> Result<Register, String> {

@@ -10,6 +10,7 @@ env_logger = "0.11.8"
 log = "0.4.29"
 num-derive = "0.4.2"
 num-traits = "0.2.19"
+strum = { version = "0.27.0", features = ["derive"] }
 
 [lib]
 name = "libvmr"

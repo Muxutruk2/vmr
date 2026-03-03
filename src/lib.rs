@@ -1,5 +1,7 @@
 use std::{collections::HashMap, fmt::Display};
 
+use strum::EnumString;
+
 #[macro_use]
 extern crate num_derive;
 
@@ -31,7 +33,7 @@ pub type Offset = i16;
 #[repr(u8)]
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
+#[derive(EnumString, Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
 pub enum Operation {
     // Misc [0]
     HALT = 0x00,
