@@ -19,20 +19,22 @@ impl Linker {
         }
     }
 
-    /// Stage 1: Parse the .vmo bytes and track the global base address
     pub fn load_object(&mut self, name: &str, data: &[u8]) {
-        // Calculate current base address (end of the previous file)
-        let base_address = self
+        let header_overhead = 3;
+
+        let current_code_size: u16 = self
             .objects
             .iter()
             .map(|obj| obj.bytecode.len() as u16)
             .sum();
 
+        let base_address = header_overhead + current_code_size;
+
         let object = ObjectFile::from_binary(data, name, base_address);
 
         for (label, offset) in object.exports.iter() {
             if self.global_symbols.contains_key(label) {
-                println!("WARNING Label {label} is redefined by {name}");
+                warn!("WARNING Label {label} is redefined by {name}");
             }
 
             self.global_symbols
@@ -42,9 +44,20 @@ impl Linker {
         self.objects.push(object);
     }
 
-    /// Stage 2 & 3: Patch placeholders and merge into one .vmr
-    pub fn link(mut self) -> Result<Vec<u8>, String> {
+    pub fn link(mut self, entry_label: &str) -> Result<Vec<u8>, String> {
         let mut final_bytecode = Vec::new();
+
+        let entry_addr = self
+            .global_symbols
+            .get(entry_label)
+            .cloned()
+            .ok_or(format!(
+                "Linker Error: Entry point '{}' not found",
+                entry_label
+            ))?;
+
+        let mut header = vec![Operation::JMP as u8];
+        header.extend_from_slice(&entry_addr.to_be_bytes());
 
         let total_size: usize = self.objects.iter().map(|o| o.bytecode.len()).sum();
         if total_size > 0xFFFF {
@@ -91,6 +104,7 @@ impl Linker {
         }
 
         let mut output = b"vmrx".to_vec();
+        output.extend(header);
         output.extend_from_slice(&final_bytecode);
 
         Ok(output)
@@ -98,23 +112,20 @@ impl Linker {
 }
 
 use clap::Parser;
-use libvmr::ObjectFile;
-use log::debug;
+use libvmr::{ObjectFile, Operation};
+use log::{debug, error, info, warn};
 use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(about = "Links .vmo files into a .vmr executable")]
 struct Args {
-    /// Input object files (.vmo)
     #[arg(short, long, value_name = "FILES", required = true)]
     inputs: Vec<PathBuf>,
 
-    /// Output executable file (.vmr)
     #[arg(short, long, value_name = "FILE", default_value = "out.vmr")]
     output: PathBuf,
 
-    /// Optional: Set a specific entry point label (default is START)
     #[arg(short, long, default_value = "START")]
     entry: String,
 }
@@ -129,40 +140,38 @@ fn main() {
         let name = path.to_string_lossy().to_string();
         match fs::read(&path) {
             Ok(data) => {
-                println!("Loading {}...", name);
+                info!("Loading {}...", name);
                 linker.load_object(&name, &data);
             }
             Err(e) => {
-                eprintln!("Error reading {}: {}", name, e);
+                error!("Error reading {}: {}", name, e);
                 std::process::exit(1);
             }
         }
     }
 
-    // 2. Check for the entry point
     if !linker.global_symbols.contains_key(&args.entry) {
-        eprintln!(
-            "Warning: No entry point '{}' found. VM might not know where to start.",
+        warn!(
+            "No entry point '{}' found. VM might not know where to start.",
             args.entry
         );
     }
 
-    // 3. Link and check for 16-bit overflow
-    match linker.link() {
+    match linker.link(&args.entry) {
         Ok(binary) => {
             if binary.len() > 0xFFFF {
-                eprintln!("Linker Error: Binary size exceeds 16-bit address space ($0xFFFF$)!");
+                error!("Binary size exceeds 16-bit address space ($0xFFFF$)!");
                 std::process::exit(1);
             }
 
             if let Err(e) = fs::write(&args.output, binary) {
-                eprintln!("Error writing output: {}", e);
+                error!("Error writing output: {}", e);
             } else {
-                println!("Successfully linked to {}", args.output.display());
+                info!("Successfully linked to {}", args.output.display());
             }
         }
         Err(e) => {
-            eprintln!("{}", e);
+            error!("{}", e);
             std::process::exit(1);
         }
     }
