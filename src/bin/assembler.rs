@@ -1,6 +1,6 @@
 use clap::Parser;
 use libvmr::*;
-use log::debug;
+use log::{debug, error, info};
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -175,13 +175,13 @@ fn main() {
     let input_content = match fs::read_to_string(&args.input) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("Error reading input file {:?}: {}", args.input, e);
+            error!("Error reading input file {:?}: {}", args.input, e);
             std::process::exit(1);
         }
     };
 
     if args.verbose {
-        println!("Assembling {:?}...", args.input);
+        info!("Assembling {:?}...", args.input);
     }
 
     let mut assembler = Assembler::new();
@@ -193,13 +193,13 @@ fn main() {
         Ok(objfile) => {
             debug!("ObjectFile: {objfile}");
             if let Err(e) = fs::write(&args.output, objfile.to_binary()) {
-                eprintln!("Error writing to output file {:?}: {}", args.output, e);
+                error!("Error writing to output file {:?}: {}", args.output, e);
                 std::process::exit(1);
             }
-            println!("Successfully assembled to {:?}", args.output);
+            info!("Successfully assembled to {:?}", args.output);
         }
         Err(e) => {
-            eprintln!("Assembly Error: {}", e);
+            error!("Assembly Error: {}", e);
             std::process::exit(1);
         }
     }

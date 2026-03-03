@@ -3,7 +3,7 @@
 use clap::Parser;
 use flagset::FlagSet;
 use libvmr::{Flags, Operation, Register};
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use num_traits::cast::FromPrimitive;
 use std::{
     fs::{self, File},
@@ -741,7 +741,7 @@ fn main() {
         };
     }
 
-    println!(
+    info!(
         "Program exited with code {} ({:x})",
         vm.get_reg(Register::R0 as usize).unwrap(),
         vm.get_reg(Register::R0 as usize).unwrap()
@@ -776,7 +776,7 @@ fn main() {
                         .expect("Could not write binary dump");
                     vm.dump_mem_readable(&mut readable_writer)
                         .expect("Could not write binary dump");
-                    eprintln!(
+                    info!(
                         "Memory dumped at {} and {}",
                         readable_path.display(),
                         bin_path.display()
