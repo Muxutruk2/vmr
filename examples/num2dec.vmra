@@ -1,7 +1,7 @@
 ; R1 = Number to print
 ; R2 = Address to write to
 EXPORT PRINTLNNUM:
-    CALL_IMM .PRINTNUM
+    CALL .PRINTNUM
     ; R0 = Number of digits
 
     ; DIV_MOD = R1 / R6 => R0 % R1 
@@ -20,15 +20,15 @@ EXPORT PRINTLNNUM:
     CMP_IMM R1, 0x00
 
     ; If even, digits filled the words perfectly. Need a new word.
-    JE_IMM .NEWLINE_NEW_WORD
+    JZ .NEWLINE_NEW_WORD
 
     ; If odd, there is a "hole" in the low byte of the last word.
-    JMP_IMM .NEWLINE_IN_PLACE   
+    JMP .NEWLINE_IN_PLACE   
 
 NEWLINE_NEW_WORD:
     ; R7 points to the word after the digits.
     STORE_R_IMM R7, 0x0A00  ; Add '\n\0'
-    JMP_IMM .DO_SYSCALL
+    JMP .DO_SYSCALL
 
 NEWLINE_IN_PLACE:
     ; R7 points to the word containing the LAST digit.
@@ -37,7 +37,7 @@ NEWLINE_IN_PLACE:
     AND_IMM R9, 0xFF00  ; Result: ['5' | \0]
     OR_IMM R9, 0x000A  ; Result: ['5' | \n]
     STORE_R_R R7, R9
-    JMP_IMM .DO_SYSCALL
+    JMP .DO_SYSCALL
 
 DO_SYSCALL:
     MOV R3, R10        ; Corrected word count
@@ -66,7 +66,7 @@ EXPORT PRINTNUM:
         MOV R1, R0
 
     CMP_IMM R1, 0x00
-    JNE_IMM .LOOP
+    JNZ .LOOP
 
     ; RSP now points to the most significant decimal.
     ; R6 is how many decimals it has laid out in the stack (minumum addressable memory: 16bits)
@@ -76,9 +76,9 @@ EXPORT PRINTNUM:
 
     LOOP2:
         CMP_IMM R6, 0x00
-        JE_IMM .END
+        JZ .END
         CMP_IMM R6, 0x01
-        JE_IMM .ONE
+        JZ .ONE
 
         ; This should run when there are 2 or more left
         POP R8
@@ -95,7 +95,7 @@ EXPORT PRINTNUM:
         ADD_IMM R7, 1
 
         SUB_IMM R6, 0x02
-        JMP_IMM .LOOP2
+        JMP .LOOP2
 
         ONE:
         ; This should run when there there is one left
@@ -108,7 +108,7 @@ EXPORT PRINTNUM:
         ADD_IMM R7, 0x01
 
         SUB_IMM R6, 0x01
-        JMP_IMM .LOOP2
+        JMP .LOOP2
 
     END:
         RET

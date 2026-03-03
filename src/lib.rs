@@ -94,22 +94,16 @@ pub enum Operation {
     POP_IMM = 0xA2, // IMM -- Pop into specific address
 
     // Control Flow [B-D]
-    // Jumps (Address from Register or Immediate)
-    JMP = 0xB0,
-    JMP_IMM = 0xB1,
-
-    // Conditionals: Zero / Equal
-    JE = 0xB2,
-    JE_IMM = 0xB3,
-
-    // Conditionals: Not Zero / Not Equal
-    JNE = 0xB6,
-    JNE_IMM = 0xB7,
+    // Jumps (Address from Immediate)
+    JMP = 0xB0, // Unconditional
+    JZ = 0xB1,  // Jump if Zero
+    JNZ = 0xB2, // Jump if not Zero
+    JA = 0xB3,  // Jump if Above
+    JB = 0xB4,  // Jump if Below
 
     // Subroutines
-    CALL = 0xD0,     // R
-    CALL_IMM = 0xD1, // IMM
-    RET = 0xD2,      // ()
+    CALL = 0xD0, // Call function at immediate address
+    RET = 0xD2,  // ()
     //
     SYSCALL = 0xFF,
 }
@@ -128,18 +122,16 @@ impl Operation {
             | Operation::PUSH
             | Operation::PUSH_M
             | Operation::POP
-            | Operation::POP_M
-            | Operation::JMP
-            | Operation::JE
-            | Operation::JNE
-            | Operation::CALL => Arguments::Reg,
+            | Operation::POP_M => Arguments::Reg,
 
-            Operation::CALL_IMM
-            | Operation::PUSH_IMM
+            Operation::PUSH_IMM
             | Operation::POP_IMM
-            | Operation::JMP_IMM
-            | Operation::JNE_IMM
-            | Operation::JE_IMM => Arguments::Imm,
+            | Operation::JMP
+            | Operation::JZ
+            | Operation::JNZ
+            | Operation::JA
+            | Operation::JB
+            | Operation::CALL => Arguments::Imm,
 
             // Two Operands: Register, Register
             Operation::MOV

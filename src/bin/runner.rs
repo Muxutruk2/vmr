@@ -572,24 +572,10 @@ impl VirtualMachine {
                 None
             }
             Operation::JMP => {
-                let r1 = self.next_reg(1)?;
-
-                Some(self.get_reg(r1)?)
-            }
-            Operation::JMP_IMM => {
                 let addr_imm = self.next(1)?;
                 Some(addr_imm)
             }
-            Operation::JE => {
-                let r1 = self.next_reg(1)?;
-
-                if self.flags.contains(Flags::Equals) {
-                    Some(self.get_reg(r1)?)
-                } else {
-                    None
-                }
-            }
-            Operation::JE_IMM => {
+            Operation::JZ => {
                 let addr_imm = self.next(1)?;
                 if self.flags.contains(Flags::Equals) {
                     Some(addr_imm)
@@ -597,36 +583,31 @@ impl VirtualMachine {
                     None
                 }
             }
-            Operation::JNE => {
-                let r1 = self.next_reg(1)?;
-
+            Operation::JNZ => {
+                let addr_imm = self.next(1)?;
                 if !self.flags.contains(Flags::Equals) {
-                    Some(self.get_reg(r1)?)
+                    Some(addr_imm)
                 } else {
                     None
                 }
             }
-            Operation::JNE_IMM => {
-                let addr_imm = self.next(1)?;
-                if !self.flags.contains(Flags::Equals) {
-                    Some(addr_imm)
+            Operation::JA => {
+                let addr = self.next(1)?;
+                if !self.flags.contains(Flags::Carry | Flags::Equals) {
+                    Some(addr)
+                } else {
+                    None
+                }
+            }
+            Operation::JB => {
+                let addr = self.next(1)?;
+                if self.flags.contains(Flags::Carry) {
+                    Some(addr)
                 } else {
                     None
                 }
             }
             Operation::CALL => {
-                let r1 = self.next_reg(1)?;
-
-                let ret_addr = self.next_instruction_addr()?;
-                *self.get_reg_mut(Register::RSP as usize)? = self
-                    .get_reg(Register::RSP as usize)?
-                    .checked_sub(1)
-                    .ok_or(RuntimeError::StackOverflow)?;
-                *self.get_mem_mut(self.get_reg(Register::RSP as usize)?)? = ret_addr;
-
-                Some(self.get_reg(r1)?)
-            }
-            Operation::CALL_IMM => {
                 let addr_imm = self.next(1)?;
 
                 let ret_addr = self.next_instruction_addr()?;

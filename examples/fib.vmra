@@ -1,18 +1,18 @@
 EXPORT FIB:
     CMP_IMM R1, 0x00
-    JE_IMM .LESS
+    JZ .LESS
     CMP_IMM R1, 0x01
-    JE_IMM .LESS
+    JZ .LESS
     
     PUSH R1
     SUB_IMM R1, 0x01
-    CALL_IMM .FIB
+    CALL .FIB
     
     POP R1
     PUSH R0
     
     SUB_IMM R1, 0x02
-    CALL_IMM .FIB
+    CALL .FIB
     
     POP R5
     ADD R0, R5
