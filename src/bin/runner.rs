@@ -9,6 +9,7 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    process::exit,
     time::UNIX_EPOCH,
 };
 
@@ -787,4 +788,6 @@ fn main() {
             }
         }
     }
+
+    exit(vm.get_reg(Register::R0 as usize).unwrap() as i32);
 }
