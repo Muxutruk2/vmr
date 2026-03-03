@@ -1,4 +1,4 @@
-aEXPORT START:
+EXPORT START:
 ; --- SETUP ---
 MOV_IMM R0, 0x01      ; Default to FAIL status (1)
 

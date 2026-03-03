@@ -21,7 +21,7 @@ for file in src/*.vmra; do
     [ -e "$file" ] || continue
     filename=$(basename "$file" .vmra)
     echo "Assembling $filename..."
-    $VMR_ASSEMBLER "$file" -o "./obj/${filename}.vmra" || { echo "Assembler failed on $file"; exit 1; }
+    $VMR_ASSEMBLER "$file" -o "./obj/${filename}.vmro" || { echo "Assembler failed on $file"; exit 1; }
 done
 
 echo -e "\n--- Linking ---"
@@ -31,9 +31,9 @@ for lib in libbin/*.vmro; do
     LIBS="$LIBS -i $lib"
 done
 
-for obj in obj/*.vmra; do
+for obj in obj/*.vmro; do
     [ -e "$obj" ] || continue
-    filename=$(basename "$obj" .vmra)
+    filename=$(basename "$obj" .vmro)
     echo "Linking $filename..."
     $VMR_LINKER $LIBS -i "$obj" -o "bin/${filename}" || { echo "Linker failed on $obj"; exit 1; }
 done
