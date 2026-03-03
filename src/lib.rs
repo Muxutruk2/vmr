@@ -1,5 +1,5 @@
+use flagset::flags;
 use std::{collections::HashMap, fmt::Display};
-
 use strum::EnumString;
 
 #[macro_use]
@@ -207,6 +207,15 @@ impl Arguments {
             Arguments::RegImmReg => 5,
             Arguments::ImmReg => 4,
         }
+    }
+}
+
+flags! {
+    pub enum Flags: u16 {
+        Equals = 0b0001,
+        Negative = 0b0010,
+        Overflow = 0b0100,
+        Carry = 0b1000,
     }
 }
 

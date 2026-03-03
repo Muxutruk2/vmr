@@ -1,7 +1,8 @@
 #![deny(clippy::arithmetic_side_effects)]
 #![deny(clippy::indexing_slicing)]
 use clap::Parser;
-use libvmr::{Operation, Register};
+use flagset::FlagSet;
+use libvmr::{Flags, Operation, Register};
 use log::{debug, error, trace};
 use num_traits::cast::FromPrimitive;
 use std::{
@@ -11,25 +12,17 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-pub type Immediate = u16;
-pub type Offset = i16;
-
 #[derive(Debug)]
 struct VirtualMachine {
     code: Vec<u8>,
     memory: Vec<u16>,
-    equal: bool,
+    flags: FlagSet<Flags>,
     current_instruction: u16,
     registers: Vec<u16>,
 }
 
 impl std::fmt::Display for VirtualMachine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "CODE")?;
-        for byte in self.code.iter() {
-            write!(f, "{byte:02x} ")?;
-        }
-
         writeln!(f, "\nInstruction Address: {:04x}", self.current_instruction)?;
 
         match self.code.get(self.current_instruction as usize) {
@@ -40,15 +33,18 @@ impl std::fmt::Display for VirtualMachine {
                 writeln!(f, "Instruction Byte: NOT_FOUND")?;
             }
         }
+
         writeln!(f, "Registers")?;
         for reg in self.registers.iter() {
             write!(f, "{:04x} ", reg)?;
         }
-        if self.equal {
-            writeln!(f, "Equal: Set")?;
-        } else {
-            writeln!(f, "Equal: Unset")?;
-        }
+
+        // Equals
+        // Negative
+        // Overflow
+        // Carry
+        writeln!(f, "\nFlags ENOC")?;
+        writeln!(f, "      {:04b}", self.flags.bits())?;
 
         let rsp = self.get_reg(Register::RSP as usize).unwrap_or(0) as isize;
 
@@ -93,6 +89,14 @@ pub enum RuntimeError {
 }
 
 impl VirtualMachine {
+    fn print_code(&self) -> String {
+        let mut a = String::new();
+        for byte in self.code.iter() {
+            a.push_str(&format!("{byte:02x} "));
+        }
+        a
+    }
+
     fn next_reg(&self, offset: u16) -> Result<usize, RuntimeError> {
         let reg_byte = self.next(offset)?;
         Ok(Register::from_u8(reg_byte).ok_or(RuntimeError::InvalidRegister)? as usize)
@@ -306,34 +310,100 @@ impl VirtualMachine {
             }
             Operation::ADD => {
                 let r1 = self.next_reg(1)?;
-
                 let r2 = self.next_reg(2)?;
+                let val1 = self.get_reg(r1)?;
+                let val2 = self.get_reg(r2)?;
 
-                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_add(self.get_reg(r2)?);
+                let (res, carry) = val1.overflowing_add(val2);
+
+                self.flags.clear();
+
+                if res == 0 {
+                    self.flags |= Flags::Equals;
+                }
+                if carry {
+                    self.flags |= Flags::Carry;
+                }
+
+                if res & 0x8000 != 0 {
+                    self.flags |= Flags::Negative;
+                }
+
+                *self.get_reg_mut(r1)? = res;
+
                 None
             }
             Operation::ADD_IMM => {
                 let r1 = self.next_reg(1)?;
-
+                let val1 = self.get_reg(r1)?;
                 let imm2: u16 = self.next(2)?;
 
-                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_add(imm2);
+                let (res, carry) = val1.overflowing_add(imm2);
+
+                self.flags.clear();
+
+                if res == 0 {
+                    self.flags |= Flags::Equals;
+                }
+                if carry {
+                    self.flags |= Flags::Carry;
+                }
+
+                if res & 0x8000 != 0 {
+                    self.flags |= Flags::Negative;
+                }
+
+                *self.get_reg_mut(r1)? = res;
+
                 None
             }
-            Operation::SUB => {
+            Operation::SUB | Operation::CMP => {
                 let r1 = self.next_reg(1)?;
-
                 let r2 = self.next_reg(2)?;
+                let val1 = self.get_reg(r1)?;
+                let val2 = self.get_reg(r2)?;
 
-                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_sub(self.get_reg(r2)?);
+                let (res, borrow) = val1.overflowing_sub(val2);
+
+                self.flags.clear();
+                if res == 0 {
+                    self.flags |= Flags::Equals;
+                }
+                if borrow {
+                    self.flags |= Flags::Carry;
+                }
+                if res & 0x8000 != 0 {
+                    self.flags |= Flags::Negative;
+                }
+
+                if op == Operation::SUB {
+                    *self.get_reg_mut(r1)? = res;
+                }
+
                 None
             }
-            Operation::SUB_IMM => {
+            Operation::SUB_IMM | Operation::CMP_IMM => {
                 let r1 = self.next_reg(1)?;
+                let val1 = self.get_reg(r1)?;
 
                 let imm2: u16 = self.next(2)?;
 
-                *self.get_reg_mut(r1)? = self.get_reg(r1)?.wrapping_sub(imm2);
+                let (res, borrow) = val1.overflowing_sub(imm2);
+
+                self.flags.clear();
+                if res == 0 {
+                    self.flags |= Flags::Equals;
+                }
+                if borrow {
+                    self.flags |= Flags::Carry;
+                }
+                if res & 0x8000 != 0 {
+                    self.flags |= Flags::Negative;
+                }
+
+                if op == Operation::SUB_IMM {
+                    *self.get_reg_mut(r1)? = res;
+                }
 
                 None
             }
@@ -426,32 +496,16 @@ impl VirtualMachine {
                 *self.get_reg_mut(r1)? >>= imm2;
                 None
             }
-            Operation::CMP => {
-                let r1 = self.next_reg(1)?;
-                let r2 = self.next_reg(2)?;
-
-                self.equal = self.get_reg(r1)? == self.get_reg(r2)?;
-                None
-            }
-            Operation::CMP_IMM => {
-                let r1 = self.next_reg(1)?;
-                let imm2: u16 = self.next(2)?;
-
-                self.equal = self.get_reg(r1)? == imm2;
-                None
-            }
             Operation::PUSH => {
                 let r1 = self.next_reg(1)?;
                 let val = self.get_reg(r1)?;
 
-                // Decrement Stack Pointer
                 let new_rsp = self
                     .get_reg(Register::RSP as usize)?
                     .checked_sub(1)
                     .ok_or(RuntimeError::StackOverflow)?;
                 *self.get_reg_mut(Register::RSP as usize)? = new_rsp;
 
-                // 2. Store the REGISTER VALUE into memory at RSP
                 *self.get_mem_mut(new_rsp)? = val;
                 None
             }
@@ -529,7 +583,7 @@ impl VirtualMachine {
             Operation::JE => {
                 let r1 = self.next_reg(1)?;
 
-                if self.equal {
+                if self.flags.contains(Flags::Equals) {
                     Some(self.get_reg(r1)?)
                 } else {
                     None
@@ -537,12 +591,16 @@ impl VirtualMachine {
             }
             Operation::JE_IMM => {
                 let addr_imm = self.next(1)?;
-                if self.equal { Some(addr_imm) } else { None }
+                if self.flags.contains(Flags::Equals) {
+                    Some(addr_imm)
+                } else {
+                    None
+                }
             }
             Operation::JNE => {
                 let r1 = self.next_reg(1)?;
 
-                if !self.equal {
+                if !self.flags.contains(Flags::Equals) {
                     Some(self.get_reg(r1)?)
                 } else {
                     None
@@ -550,7 +608,11 @@ impl VirtualMachine {
             }
             Operation::JNE_IMM => {
                 let addr_imm = self.next(1)?;
-                if !self.equal { Some(addr_imm) } else { None }
+                if !self.flags.contains(Flags::Equals) {
+                    Some(addr_imm)
+                } else {
+                    None
+                }
             }
             Operation::CALL => {
                 let r1 = self.next_reg(1)?;
@@ -656,7 +718,7 @@ impl VirtualMachine {
         }
         Ok(VirtualMachine {
             code: code.into_iter().skip(4).collect(),
-            equal: false,
+            flags: FlagSet::<Flags>::empty(),
             memory: vec![0; 0xFFFF],
             current_instruction: 0,
             registers,
@@ -701,6 +763,7 @@ fn main() {
                 match e {
                     RuntimeError::Halted => {
                         debug!("{vm}");
+                        debug!("CODE: {}", vm.print_code());
                     }
                     _ => {
                         error!("{vm}");
