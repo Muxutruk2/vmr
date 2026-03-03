@@ -193,6 +193,11 @@ impl VirtualMachine {
             &self.code.get(pc..end).unwrap()
         );
 
+        let jump = |cond: bool| -> Result<Option<u16>, RuntimeError> {
+            let addr = self.next(1)?;
+            Ok(if cond { Some(addr) } else { None })
+        };
+
         let new_addr: Option<u16> = match op {
             Operation::HALT => return Err(RuntimeError::Halted),
             Operation::NOP => None,
@@ -571,42 +576,21 @@ impl VirtualMachine {
 
                 None
             }
-            Operation::JMP => {
-                let addr_imm = self.next(1)?;
-                Some(addr_imm)
-            }
-            Operation::JZ => {
-                let addr_imm = self.next(1)?;
-                if self.flags.contains(Flags::Equals) {
-                    Some(addr_imm)
-                } else {
-                    None
-                }
-            }
-            Operation::JNZ => {
-                let addr_imm = self.next(1)?;
-                if !self.flags.contains(Flags::Equals) {
-                    Some(addr_imm)
-                } else {
-                    None
-                }
-            }
-            Operation::JA => {
-                let addr = self.next(1)?;
-                if !self.flags.contains(Flags::Carry | Flags::Equals) {
-                    Some(addr)
-                } else {
-                    None
-                }
-            }
-            Operation::JB => {
-                let addr = self.next(1)?;
-                if self.flags.contains(Flags::Carry) {
-                    Some(addr)
-                } else {
-                    None
-                }
-            }
+
+            Operation::JMP => jump(true)?,
+            Operation::JZ => jump(self.flags.contains(Flags::Equals))?,
+            Operation::JNZ => jump(!self.flags.contains(Flags::Equals))?,
+            Operation::JA => jump(self.flags.is_disjoint(Flags::Carry | Flags::Equals))?,
+            Operation::JB => jump(self.flags.contains(Flags::Carry))?,
+            Operation::JAE => jump(!self.flags.contains(Flags::Carry))?,
+            Operation::JBE => jump(!self.flags.is_disjoint(Flags::Carry | Flags::Equals))?,
+            Operation::JN => jump(self.flags.contains(Flags::Negative))?,
+            Operation::JNP => jump(!self.flags.contains(Flags::Negative))?,
+            Operation::JO => jump(self.flags.contains(Flags::Overflow))?,
+            Operation::JNO => jump(!self.flags.contains(Flags::Overflow))?,
+            Operation::JC => jump(self.flags.contains(Flags::Carry))?,
+            Operation::JNC => jump(!self.flags.contains(Flags::Carry))?,
+
             Operation::CALL => {
                 let addr_imm = self.next(1)?;
 

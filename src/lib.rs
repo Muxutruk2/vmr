@@ -100,6 +100,14 @@ pub enum Operation {
     JNZ = 0xB2, // Jump if not Zero
     JA = 0xB3,  // Jump if Above
     JB = 0xB4,  // Jump if Below
+    JAE = 0xB5, // Jump if Above or Equal
+    JBE = 0xB6, // Jump if Below or Equal
+    JN = 0xB7,  // Jump if Negative
+    JNP = 0xB8, // Jump if Not Negative
+    JO = 0xB9,  // Jump if Overflow
+    JNO = 0xBA, // Jump if Not Overflow
+    JC = 0xBB,  // Jump if Carry
+    JNC = 0xBC, // Jump if Not Carry
 
     // Subroutines
     CALL = 0xD0, // Call function at immediate address
@@ -131,6 +139,14 @@ impl Operation {
             | Operation::JNZ
             | Operation::JA
             | Operation::JB
+            | Operation::JAE
+            | Operation::JBE
+            | Operation::JN
+            | Operation::JNP
+            | Operation::JO
+            | Operation::JNO
+            | Operation::JC
+            | Operation::JNC
             | Operation::CALL => Arguments::Imm,
 
             // Two Operands: Register, Register
