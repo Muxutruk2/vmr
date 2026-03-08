@@ -3,8 +3,8 @@
 set -e
 
 echo "Cleaning up build artifacts..."
-rm -rfv libbin/ obj/ bin/ logs/
-mkdir -p libbin obj bin logs
+rm -rfv libobj/ obj/ bin/ logs/
+mkdir -p libobj obj bin logs
 
 echo "Cleanup complete."
 
@@ -13,7 +13,7 @@ for file in libsrc/*.vmra; do
     [ -e "$file" ] || continue
     filename=$(basename "$file" .vmra)
     echo "Assembling $filename..."
-    $VMR_ASSEMBLER "$file" -o "./libbin/${filename}.vmro" || { echo "Assembler failed on $file"; exit 1; }
+    $VMR_ASSEMBLER "$file" -o "./libobj/${filename}.vmro" || { echo "Assembler failed on $file"; exit 1; }
 done
 
 echo -e "\n--- Compiling Test Sources ---"
@@ -26,7 +26,7 @@ done
 
 echo -e "\n--- Linking ---"
 LIBS=""
-for lib in libbin/*.vmro; do
+for lib in libobj/*.vmro; do
     [ -e "$lib" ] || continue
     LIBS="$LIBS -i $lib"
 done
