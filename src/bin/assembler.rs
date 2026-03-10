@@ -21,10 +21,11 @@ impl Assembler {
     fn scan_labels(&self, lines: &[&str], objfile: &mut ObjectFile) {
         let mut pc: u16 = 0;
 
-        for line in lines
+        for (line, line_num) in lines
             .iter()
             .map(|l| l.trim())
-            .filter(|l| !l.is_empty() && !l.starts_with(';'))
+            .zip(1..)
+            .filter(|(l, _)| !l.is_empty() && !l.starts_with(';'))
         {
             let parts: Vec<&str> = line.split_whitespace().collect();
 
@@ -34,19 +35,20 @@ impl Assembler {
                 if parts[0] == "EXPORT" {
                     if parts.len() > 2 {
                         warn!(
-                            "Malformed export at PC {}: '{}'. Labels should not contain spaces.",
-                            pc, line
+                            "Malformed export at line {line_num}: '{line}'. Labels should not contain spaces.",
                         );
                     }
                     objfile.exports.push((label_name.to_string(), pc));
                 } else {
                     if parts.len() > 1 {
                         warn!(
-                            "Malformed label at PC {}: '{}'. Labels should not contain spaces.",
-                            pc, line
+                            "Malformed export at line {line_num}: '{line}'. Labels should not contain spaces.",
                         );
                     }
-                    objfile.labels.insert(label_name.to_string(), pc);
+                    let previous = objfile.labels.insert(label_name.to_string(), pc).is_some();
+                    if previous {
+                        warn!("Duplicate label '{label_name}' at line {line_num}: '{line}'");
+                    }
                 }
                 continue;
             }
