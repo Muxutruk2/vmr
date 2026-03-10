@@ -1,6 +1,6 @@
 use clap::Parser;
 use libvmr::*;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -18,33 +18,47 @@ impl Assembler {
         Self {}
     }
 
-    /// First Pass: Determine the address of every label
     fn scan_labels(&self, lines: &[&str], objfile: &mut ObjectFile) {
         let mut pc: u16 = 0;
-        for line in lines {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with(';') {
+
+        for line in lines
+            .iter()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.starts_with(';'))
+        {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+
+            if let Some(last_word) = parts.last().filter(|w| w.ends_with(':')) {
+                let label_name = last_word.strip_suffix(':').unwrap();
+
+                if parts[0] == "EXPORT" {
+                    if parts.len() > 2 {
+                        warn!(
+                            "Malformed export at PC {}: '{}'. Labels should not contain spaces.",
+                            pc, line
+                        );
+                    }
+                    objfile.exports.push((label_name.to_string(), pc));
+                } else {
+                    if parts.len() > 1 {
+                        warn!(
+                            "Malformed label at PC {}: '{}'. Labels should not contain spaces.",
+                            pc, line
+                        );
+                    }
+                    objfile.labels.insert(label_name.to_string(), pc);
+                }
                 continue;
             }
 
-            if let Some(label_str) = line.strip_prefix("EXPORT") {
-                if let Some(label_name) = label_str.strip_suffix(':').map(str::trim) {
-                    objfile.exports.push((label_name.to_string(), pc));
-                }
-                continue;
-            } else if let Some(label_name) = line.strip_suffix(':') {
-                objfile.labels.insert(label_name.to_string(), pc);
-            } else {
-                // Parse the opcode to determine how many bytes this instruction takes
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Ok(op) = Operation::from_str(parts[0]) {
-                    pc += op.arg_type().to_offset() as u16;
-                }
+            if let Some(first_word) = parts.first()
+                && let Ok(op) = Operation::from_str(first_word)
+            {
+                pc += op.arg_type().to_offset() as u16;
             }
         }
     }
 
-    /// Second Pass: Generate bytecode
     pub fn assemble(&mut self, input: &str, name: &str) -> Result<ObjectFile, String> {
         let mut objfile = ObjectFile::new(name.to_string());
 
