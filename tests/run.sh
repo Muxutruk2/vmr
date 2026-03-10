@@ -2,6 +2,10 @@
 
 set -e
 
+if [[ "$VMR_TEST_DIR" ]] then
+    cd $VMR_TEST_DIR
+fi
+
 echo "Cleaning up build artifacts..."
 rm -rfv libobj/ obj/ bin/ logs/
 mkdir -p libobj obj bin logs
