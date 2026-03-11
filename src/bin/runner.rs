@@ -621,25 +621,29 @@ impl VirtualMachine {
                 let syscallnum = self.get_reg(Register::R1 as usize)?;
                 match syscallnum {
                     0x01 => {
-                        let print_addr = self.get_reg(Register::R2 as usize)? as usize;
-                        let count = self.get_reg(Register::R3 as usize)? as usize;
+                        let print_addr: usize = self.get_reg(Register::R2 as usize)? as usize;
+                        let byte_count: usize = self.get_reg(Register::R3 as usize)? as usize;
+
+                        // how many 16-bit words to fetch
+                        let word_count = byte_count.div_ceil(2);
 
                         let limit = print_addr
-                            .checked_add(count)
+                            .checked_add(word_count)
                             .ok_or(RuntimeError::MemoryOOB)?;
 
-                        let u16_data = self
+                        let u16_data: &[u16] = self
                             .memory
                             .get(print_addr..limit)
                             .ok_or(RuntimeError::MemoryOOB)?;
 
+                        // convert to bytes and truncate to the exact byte_count
                         let corrected_bytes: Vec<u8> = u16_data
                             .iter()
-                            .flat_map(|&word| word.to_be_bytes()) // Force Big-Endian order [0x48, 0x65]
+                            .flat_map(|&word| word.to_be_bytes()) // [High Byte, Low Byte]
+                            .take(byte_count)
                             .collect();
 
-                        debug!("Printing from {print_addr:x} to {limit:x}");
-
+                        debug!("Printing {byte_count} bytes from addr {print_addr:x}");
                         print!("{}", String::from_utf8_lossy(&corrected_bytes));
 
                         None

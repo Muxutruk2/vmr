@@ -48,7 +48,7 @@ Addressed by one byte.
 
 - Input Registers: R1, R2, R3, R4. For > 5, the stack is used
 
-- General Registers: R5, R6, R6, R8, R9.
+- General Registers: R5, R6, R7, R8, R9.
 
 - Untouched Registers: R10, R11, R12, R13, R14, R15.
 
@@ -58,7 +58,7 @@ Addressed by one byte.
 
 - SYSCALL NUMBER: R1
 
-- R1 0x01 PRINT. R2 Address. R3 Number of bytes (1 byte = 16 bit)
+- R1 0x01 PRINT. R2 Address. R3 Number of BYTESs
 
 ## Virtual Machine
 
