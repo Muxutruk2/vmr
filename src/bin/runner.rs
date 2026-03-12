@@ -706,7 +706,7 @@ struct Args {
     dump: bool,
 }
 
-fn main() {
+fn main() -> Result<(), ExecutableError> {
     env_logger::builder()
         .format_timestamp(None)
         .parse_default_env()
@@ -721,7 +721,7 @@ fn main() {
 
     *registers.get_mut(Register::RSP as usize).unwrap() = 0xFFFF;
 
-    let mut vm = VirtualMachine::from_bytes(code, registers).unwrap();
+    let mut vm = VirtualMachine::from_bytes(code, registers)?;
 
     loop {
         match vm.cycle() {
