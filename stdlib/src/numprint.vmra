@@ -1,119 +1,57 @@
-; R1 = Number to print
-; R2 = Address to write to
+; R1 = Number
+; R2 = Address
+; R3 = Base of the representation
 EXPORT U16PRINTLN:
     PUSH R1
-
-    CALL .U16MEM ; This lays out the decimal representation of R1 in R2..
-    ; R0 = Number of digits
-
-    PUSH R0
-
-    ; DIV_MOD = R1 / R6 => R0 % R1 
-    MOV_IMM R6, 0x02
-    MOV R1, R0
-    DIV_MOD R6
-
-    ; R0 = WORDs that contain 2 digits, 
-    ; R7 = Pointer to the last word or the next empty one
+    PUSH R3
+    CALL .U16MEM       ; R0 now holds digit count
+    
+    ; R7 = Start address + digit count
     MOV R7, R2
-    ADD R7, R0         
-
-    POP R0 ; Restore R0 to the BYTE count
-    ADD_IMM R0, 0x01 ; Extra byte for the newline
-
-    ; R1 = 1 if there is a stray digit
-    CMP_IMM R1, 0x00
-
-    ; If even, digits filled the words perfectly. Need a new word.
-    JZ .NEWLINE_NEW_WORD
-
-    ; If odd, there is a "hole" in the low byte of the last word.
-    JMP .NEWLINE_IN_PLACE   
-
-NEWLINE_NEW_WORD:
-    ; R7 points to the word after the digits.
-    STORE_R_IMM R7, 0x0A00  ; Add '\n\0'
-    JMP .DO_SYSCALL
-
-NEWLINE_IN_PLACE:
-    ; R7 points to the word containing the LAST digit.
-    LOAD R9, R7        ; Load word containing ['5' | \0]
-    AND_IMM R9, 0xFF00 ; Result: ['5' | \0]
-    OR_IMM R9, 0x000A  ; Result: ['5' | \n]
-    STORE_R_R R7, R9
-    JMP .DO_SYSCALL
-
-DO_SYSCALL:
-    MOV R3, R0         ; R0 byte count
+    ADD R7, R0         ; R7 now points to the first empty slot after digits
+    
+    STORE_R_IMM R7, 0x000A ; Append newline at the end
+    
+    ADD_IMM R0, 1      ; Increment count to include the newline
+    MOV R3, R0         ; R3 = total length for SYSCALL
     MOV_IMM R1, 0x01   ; PRINT
     SYSCALL
 
-    MOV_IMM R0, 0x00   ; RETURN 0
+    MOV_IMM R0, 0x00
+    POP R3
     POP R1
     RET
 
-; R1 = Number to print
-; R2 = Memory address to write (must have 6 WORDS available after)
+; R1 = Number
+; R2 = Buffer Address
+; R3 = Base
 ; Returns R0 = Number of digits
 EXPORT U16MEM:
-    ; R5 = Divisor, R6 = Counter, R7 = Pointer to where it should be stored
-    MOV_IMM R5, 0x0A 
-    MOV_IMM R6, 0x00
-    MOV R7, R2
+    
+    MOV R7, R2      ; Pointer
+    MOV_IMM R6, 0   ; Counter
 
-    ; WHILE (quotient != 0)
-    LOOP:
-        ADD_IMM R6, 0x01
-        DIV_MOD R5
+PUSH_DIGITS:
+    DIV_MOD R3
+    ADD_IMM R1, 48  ; Convert remainder to ASCII
+    PUSH R1         ; Push digit onto stack
+    ADD_IMM R6, 1   ; Increment count
+    
+    MOV R1, R0
+    CMP_IMM R1, 0   
+    JNZ .PUSH_DIGITS ; Check if quotient is zero
 
-        ; R0 = Quotient, R1 = Remainder
-        PUSH R1
-        MOV R1, R0
+    ; At this point, R6 is the count and digits are on the stack.
+    ; Pop them into memory starting at R2.
+    MOV R0, R6      ; Prepare return value
+    MOV R7, R2      ; Reset pointer to start of buffer
 
-    CMP_IMM R1, 0x00
-    JNZ .LOOP
+POP_DIGITS:
+    POP R1
+    STORE_R_R R7, R1
+    ADD_IMM R7, 1
+    SUB_IMM R6, 1
+    CMP_IMM R6, 0
+    JNZ .POP_DIGITS
 
-    ; RSP now points to the most significant decimal.
-    ; R6 is how many decimals it has laid out in the stack (minumum addressable memory: 16bits)
-
-    ; Return the number of decimals
-    MOV R0, R6
-
-    LOOP2:
-        CMP_IMM R6, 0x00
-        JZ .END
-        CMP_IMM R6, 0x01
-        JZ .ONE
-
-        ; This should run when there are 2 or more left
-        POP R8
-        ADD_IMM R8, 48
-
-        SHL_IMM R8, 0x08
-
-        POP R9
-        ADD_IMM R9, 48
-
-        OR R8, R9
-
-        STORE_R_R R7, R8
-        ADD_IMM R7, 1
-
-        SUB_IMM R6, 0x02
-        JMP .LOOP2
-
-        ONE:
-        ; This should run when there there is one left
-        POP R8
-        ADD_IMM R8, 48
-
-        SHL_IMM R8, 0x08
-
-        STORE_R_R R7, R8
-        ADD_IMM R7, 0x01
-
-        SUB_IMM R6, 0x01
-        JMP .LOOP2
-
-    END:
-        RET
+    RET

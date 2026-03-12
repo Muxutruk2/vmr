@@ -624,11 +624,8 @@ impl VirtualMachine {
                         let print_addr: usize = self.get_reg(Register::R2 as usize)? as usize;
                         let byte_count: usize = self.get_reg(Register::R3 as usize)? as usize;
 
-                        // how many 16-bit words to fetch
-                        let word_count = byte_count.div_ceil(2);
-
                         let limit = print_addr
-                            .checked_add(word_count)
+                            .checked_add(byte_count)
                             .ok_or(RuntimeError::MemoryOOB)?;
 
                         let u16_data: &[u16] = self
@@ -636,14 +633,14 @@ impl VirtualMachine {
                             .get(print_addr..limit)
                             .ok_or(RuntimeError::MemoryOOB)?;
 
-                        // convert to bytes and truncate to the exact byte_count
                         let corrected_bytes: Vec<u8> = u16_data
                             .iter()
-                            .flat_map(|&word| word.to_be_bytes()) // [High Byte, Low Byte]
-                            .take(byte_count)
+                            .map(|&word| word as u8) // This truncates the u16 to the lower 8 bits
                             .collect();
 
-                        debug!("Printing {byte_count} bytes from addr {print_addr:x}");
+                        debug!(
+                            "Printing {byte_count} characters from {byte_count} words starting at addr {print_addr:x}"
+                        );
                         print!("{}", String::from_utf8_lossy(&corrected_bytes));
 
                         None

@@ -41,7 +41,7 @@ for test_obj in tests/obj/*.vmro; do
     # 4. Link if the library exists
     if [ -f "$matching_lib" ]; then
         echo "Linking $test_name with library $lib_prefix..."
-        $VMR_LINKER -i "$matching_lib" -i "$test_obj" -o "tests/bin/${test_name}" || { echo "Linking failed for $test_name"; exit 1; }
+        $VMR_LINKER -i "$matching_lib" -i "$test_obj" -o "tests/bin/${test_name}.bin" || { echo "Linking failed for ${test_name}"; exit 1; }
     else
         echo "Warning: No library found for $test_name (Expected $matching_lib). Skipping..."
     fi
