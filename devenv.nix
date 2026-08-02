@@ -16,6 +16,7 @@
     hexedit
     wxhexeditor
     cargo-watch
+    just
   ];
 
   languages.rust.enable = true;
