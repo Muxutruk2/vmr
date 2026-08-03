@@ -103,7 +103,7 @@ pub enum Operation {
     JAE = 0xB5, // Jump if Above or Equal
     JBE = 0xB6, // Jump if Below or Equal
     JN = 0xB7,  // Jump if Negative
-    JNP = 0xB8, // Jump if Not Negative
+    JNN = 0xB8, // Jump if Not Negative
     JO = 0xB9,  // Jump if Overflow
     JNO = 0xBA, // Jump if Not Overflow
     JC = 0xBB,  // Jump if Carry
@@ -142,7 +142,7 @@ impl Operation {
             | Operation::JAE
             | Operation::JBE
             | Operation::JN
-            | Operation::JNP
+            | Operation::JNN
             | Operation::JO
             | Operation::JNO
             | Operation::JC
@@ -181,9 +181,9 @@ impl Operation {
             Operation::STORE_IMM_IMM => Arguments::ImmImm,
 
             // Three Operands: Register, Immediate, Register (Relative Addressing)
-            Operation::LOAD_REL | Operation::STORE_REL_R | Operation::STORE_REL_IMM => {
-                Arguments::RegImmReg
-            }
+            Operation::LOAD_REL | Operation::STORE_REL_R => Arguments::RegImmReg,
+
+            Operation::STORE_REL_IMM => Arguments::RegImmImm,
         }
     }
 }
@@ -200,7 +200,8 @@ pub enum Arguments {
     ImmImm = 0x04,
     RegImmReg = 0x05,
     ImmReg = 0x06,
-    Imm,
+    Imm = 0x07,
+    RegImmImm = 0x08,
 }
 
 impl Arguments {
@@ -214,6 +215,7 @@ impl Arguments {
             Arguments::ImmImm => 5,
             Arguments::RegImmReg => 5,
             Arguments::ImmReg => 4,
+            Arguments::RegImmImm => 6,
         }
     }
 }

@@ -295,15 +295,12 @@ impl VirtualMachine {
             }
             Operation::STORE_REL_IMM => {
                 let r1 = self.next_reg(1)?;
-
                 let offset: i16 = self.next(2)?;
-                let imm_value: u16 = self.next(5)?;
-
+                let imm_value: u16 = self.next(4)?;
                 let base_addr = self.get_reg(r1)? as i32;
                 let final_addr = base_addr
                     .checked_add(offset as i32)
                     .ok_or(RuntimeError::OffsetOOB)? as usize;
-
                 *self.get_mem_mut(final_addr)? = imm_value;
                 None
             }
@@ -319,48 +316,44 @@ impl VirtualMachine {
                 let r2 = self.next_reg(2)?;
                 let val1 = self.get_reg(r1)?;
                 let val2 = self.get_reg(r2)?;
-
                 let (res, carry) = val1.overflowing_add(val2);
-
+                let overflow = (val1 ^ res) & (val2 ^ res) & 0x8000 != 0;
                 self.flags.clear();
-
                 if res == 0 {
                     self.flags |= Flags::Equals;
                 }
                 if carry {
                     self.flags |= Flags::Carry;
                 }
-
+                if overflow {
+                    self.flags |= Flags::Overflow;
+                }
                 if res & 0x8000 != 0 {
                     self.flags |= Flags::Negative;
                 }
-
                 *self.get_reg_mut(r1)? = res;
-
                 None
             }
             Operation::ADD_IMM => {
                 let r1 = self.next_reg(1)?;
                 let val1 = self.get_reg(r1)?;
                 let imm2: u16 = self.next(2)?;
-
                 let (res, carry) = val1.overflowing_add(imm2);
-
+                let overflow = (val1 ^ res) & (imm2 ^ res) & 0x8000 != 0;
                 self.flags.clear();
-
                 if res == 0 {
                     self.flags |= Flags::Equals;
                 }
                 if carry {
                     self.flags |= Flags::Carry;
                 }
-
+                if overflow {
+                    self.flags |= Flags::Overflow;
+                }
                 if res & 0x8000 != 0 {
                     self.flags |= Flags::Negative;
                 }
-
                 *self.get_reg_mut(r1)? = res;
-
                 None
             }
             Operation::SUB | Operation::CMP => {
@@ -368,9 +361,8 @@ impl VirtualMachine {
                 let r2 = self.next_reg(2)?;
                 let val1 = self.get_reg(r1)?;
                 let val2 = self.get_reg(r2)?;
-
                 let (res, borrow) = val1.overflowing_sub(val2);
-
+                let overflow = (val1 ^ val2) & (val1 ^ res) & 0x8000 != 0;
                 self.flags.clear();
                 if res == 0 {
                     self.flags |= Flags::Equals;
@@ -378,24 +370,23 @@ impl VirtualMachine {
                 if borrow {
                     self.flags |= Flags::Carry;
                 }
+                if overflow {
+                    self.flags |= Flags::Overflow;
+                }
                 if res & 0x8000 != 0 {
                     self.flags |= Flags::Negative;
                 }
-
                 if op == Operation::SUB {
                     *self.get_reg_mut(r1)? = res;
                 }
-
                 None
             }
             Operation::SUB_IMM | Operation::CMP_IMM => {
                 let r1 = self.next_reg(1)?;
                 let val1 = self.get_reg(r1)?;
-
                 let imm2: u16 = self.next(2)?;
-
                 let (res, borrow) = val1.overflowing_sub(imm2);
-
+                let overflow = (val1 ^ imm2) & (val1 ^ res) & 0x8000 != 0;
                 self.flags.clear();
                 if res == 0 {
                     self.flags |= Flags::Equals;
@@ -403,14 +394,15 @@ impl VirtualMachine {
                 if borrow {
                     self.flags |= Flags::Carry;
                 }
+                if overflow {
+                    self.flags |= Flags::Overflow;
+                }
                 if res & 0x8000 != 0 {
                     self.flags |= Flags::Negative;
                 }
-
                 if op == Operation::SUB_IMM {
                     *self.get_reg_mut(r1)? = res;
                 }
-
                 None
             }
             Operation::AND => {
@@ -586,7 +578,7 @@ impl VirtualMachine {
             Operation::JAE => jump(!self.flags.contains(Flags::Carry))?,
             Operation::JBE => jump(!self.flags.is_disjoint(Flags::Carry | Flags::Equals))?,
             Operation::JN => jump(self.flags.contains(Flags::Negative))?,
-            Operation::JNP => jump(!self.flags.contains(Flags::Negative))?,
+            Operation::JNN => jump(!self.flags.contains(Flags::Negative))?,
             Operation::JO => jump(self.flags.contains(Flags::Overflow))?,
             Operation::JNO => jump(!self.flags.contains(Flags::Overflow))?,
             Operation::JC => jump(self.flags.contains(Flags::Carry))?,
@@ -678,8 +670,8 @@ impl VirtualMachine {
     }
 
     pub fn from_bytes(code: Vec<u8>, registers: Vec<u16>) -> Result<Self, ExecutableError> {
-        match code.get(3) {
-            Some(0x78) => {}
+        match code.get(0..4) {
+            Some(b"vmrx") => {}
             Some(_) => return Err(ExecutableError::InvalidFlag),
             None => return Err(ExecutableError::InvalidBinary),
         }
@@ -719,7 +711,7 @@ fn main() -> Result<(), ExecutableError> {
 
     registers.extend(std::iter::repeat_n(0, 17));
 
-    *registers.get_mut(Register::RSP as usize).unwrap() = 0xFFFF;
+    *registers.get_mut(Register::RSP as usize).unwrap() = 0xFFFE;
 
     let mut vm = VirtualMachine::from_bytes(code, registers)?;
 

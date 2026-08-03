@@ -111,13 +111,26 @@ impl Assembler {
                     objfile.bytecode.extend_from_slice(&imm2.to_be_bytes());
                 }
                 Arguments::RegImmReg => {
-                    todo!("RegImmReg OpCodes are not supported")
+                    objfile.bytecode.push(self.parse_reg(parts[1])? as u8);
+                    let imm_pos1 = objfile.bytecode.len() as u16;
+                    let imm1 = Self::resolve_value(&mut objfile, parts[2], imm_pos1)?;
+                    objfile.bytecode.extend_from_slice(&imm1.to_be_bytes());
+                    objfile.bytecode.push(self.parse_reg(parts[3])? as u8);
                 }
                 Arguments::ImmReg => {
                     let imm_pos1 = objfile.bytecode.len() as u16;
                     let imm = Self::resolve_value(&mut objfile, parts[1], imm_pos1)?;
                     objfile.bytecode.extend_from_slice(&imm.to_be_bytes());
                     objfile.bytecode.push(self.parse_reg(parts[2])? as u8);
+                }
+                Arguments::RegImmImm => {
+                    objfile.bytecode.push(self.parse_reg(parts[1])? as u8);
+                    let imm_pos1 = objfile.bytecode.len() as u16;
+                    let imm1 = Self::resolve_value(&mut objfile, parts[2], imm_pos1)?;
+                    objfile.bytecode.extend_from_slice(&imm1.to_be_bytes());
+                    let imm_pos2 = objfile.bytecode.len() as u16;
+                    let imm2 = Self::resolve_value(&mut objfile, parts[3], imm_pos2)?;
+                    objfile.bytecode.extend_from_slice(&imm2.to_be_bytes());
                 }
             }
         }
