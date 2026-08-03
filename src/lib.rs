@@ -96,7 +96,7 @@ impl<T: 'static> IndexedVec<T> {
     /// Helper to enforce the inner Vec limit when `T = u16`: maximum allowed size is `u16::MAX - 1`.
     const fn assert_u16_bounds(target_len: usize) -> Result<(), IndexedVecErr> {
         let max_allowed = (u16::MAX - 1) as usize;
-        if target_len <= max_allowed {
+        if target_len >= max_allowed {
             return Err(IndexedVecErr);
         }
         Ok(())
@@ -143,10 +143,10 @@ impl<T> TryFrom<Vec<T>> for IndexedVec<T> {
     type Error = ();
 
     fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
-        if value.len() < u16::MAX.into() {
-            return Err(());
+        if value.len() <= u16::MAX.into() {
+            return Ok(Self { data: value });
         }
-        Ok(Self { data: value })
+        Err(())
     }
 }
 
