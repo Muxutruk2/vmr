@@ -1,4 +1,3 @@
-#![deny(clippy::arithmetic_side_effects)]
 #![deny(clippy::indexing_slicing)]
 use clap::Parser;
 use flagset::FlagSet;
@@ -28,7 +27,7 @@ impl std::fmt::Display for VirtualMachine {
 
         match self.code.get(self.current_instruction as usize) {
             Some(n) => {
-                writeln!(f, "Instruction Byte: {:02x}", n)?;
+                writeln!(f, "Instruction Byte: {n:02x}")?;
             }
             None => {
                 writeln!(f, "Instruction Byte: NOT_FOUND")?;
@@ -36,8 +35,8 @@ impl std::fmt::Display for VirtualMachine {
         }
 
         writeln!(f, "Registers")?;
-        for reg in self.registers.iter() {
-            write!(f, "{:04x} ", reg)?;
+        for reg in &self.registers {
+            write!(f, "{reg:04x} ")?;
         }
 
         // Equals
@@ -47,7 +46,7 @@ impl std::fmt::Display for VirtualMachine {
         writeln!(f, "\nFlags ENOC")?;
         writeln!(f, "      {:04b}", self.flags.bits())?;
 
-        let rsp = self.get_reg(Register::RSP as usize).unwrap_or(0) as isize;
+        let rsp = i32::from(self.get_reg(Register::RSP as usize).unwrap_or(0));
 
         writeln!(f, "Stack Dump:")?;
 
@@ -56,15 +55,15 @@ impl std::fmt::Display for VirtualMachine {
         // "0x0000 " 7 characters.
         // 5 blocks * 7 chars = 35 spaces of offset.
         let indent = " ".repeat(5 * 7);
-        writeln!(f, "{} ↓RSP", indent)?;
+        writeln!(f, "{indent} ↓RSP")?;
 
         for offset in range {
             let target_idx = rsp
                 .checked_add(offset)
                 .expect("Reading the stack resulted on ");
 
-            if let Some(val) = self.memory.get(target_idx as usize) {
-                write!(f, "{:#06x} ", val)?;
+            if let Some(val) = self.memory.get(target_idx.unsigned_abs() as usize) {
+                write!(f, "{val:#06x} ")?;
             } else {
                 // Out of bounds placeholder
                 write!(f, "______ ")?;
@@ -90,12 +89,11 @@ pub enum RuntimeError {
 }
 
 impl VirtualMachine {
-    fn print_code(&self) -> String {
-        let mut a = String::new();
-        for byte in self.code.iter() {
-            a.push_str(&format!("{byte:02x} "));
+    fn _print_code(&self, writer: &mut dyn Write) -> Result<(), std::io::Error> {
+        for byte in &self.code {
+            write!(writer, "{byte:02x} ")?;
         }
-        a
+        Ok(())
     }
 
     fn next_reg(&self, offset: u16) -> Result<usize, RuntimeError> {
@@ -121,7 +119,9 @@ impl VirtualMachine {
             .get(start_idx..end_idx)
             .ok_or(RuntimeError::InstructionOOB)?;
 
-        let array: T::Bytes = bytes.try_into().map_err(|_| RuntimeError::InstructionOOB)?;
+        let array: T::Bytes = bytes
+            .try_into()
+            .map_err(|_err| RuntimeError::InstructionOOB)?;
 
         Ok(T::from_be_bytes(&array))
     }
@@ -162,7 +162,7 @@ impl VirtualMachine {
 
         match last_index {
             Some(index) => {
-                for byte in self.memory.get(0..index).unwrap().iter() {
+                for byte in self.memory.get(0..index).expect("Invalid index") {
                     write!(f, "{byte:04x} ")?;
                 }
             }
@@ -172,6 +172,7 @@ impl VirtualMachine {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines, reason = "VM cycle function")]
     pub fn cycle(&mut self) -> Result<(), RuntimeError> {
         let pc = self.current_instruction as usize;
 
@@ -180,10 +181,8 @@ impl VirtualMachine {
         }
 
         let op_code = *self.code.get(pc).ok_or(RuntimeError::InstructionOOB)?;
-        let op = match Operation::from_u8(op_code) {
-            Some(o) => Ok(o),
-            None => Err(RuntimeError::InvalidOPCode(op_code)),
-        }?;
+        let op = Operation::from_u8(op_code).ok_or(RuntimeError::InvalidOPCode(op_code))?;
+
         let arg_type = op.arg_type();
 
         let end = std::cmp::min(pc.wrapping_add(5), self.code.len());
@@ -191,7 +190,7 @@ impl VirtualMachine {
             "PC: {pc:02x} | Op: {:-13} | Args: {:-20} | Next 6 bytes {:02x?}",
             format!("{:?}", op),
             format!("{:?}", arg_type),
-            &self.code.get(pc..end).unwrap()
+            &self.code.get(pc..end).expect("Could not get last bytes")
         );
 
         let jump = |cond: bool| -> Result<Option<u16>, RuntimeError> {
@@ -234,10 +233,11 @@ impl VirtualMachine {
 
                 let r3 = self.next_reg(4)?;
 
-                let base_addr = self.get_reg(r1)? as i32;
+                let base_addr = i32::from(self.get_reg(r1)?);
                 let final_addr = base_addr
-                    .checked_add(offset as i32)
-                    .ok_or(RuntimeError::OffsetOOB)? as usize;
+                    .checked_add(i32::from(offset))
+                    .ok_or(RuntimeError::OffsetOOB)?
+                    .unsigned_abs() as usize;
 
                 *self.get_reg_mut(r3)? = self.get_mem(final_addr)?;
                 None
@@ -267,11 +267,11 @@ impl VirtualMachine {
 
                 let r3 = self.next_reg(4)?;
 
-                let base_addr = self.get_reg(r1)? as i32;
+                let base_addr = i32::from(self.get_reg(r1)?);
                 let final_addr: usize = base_addr
-                    .checked_add(offset as i32)
+                    .checked_add(i32::from(offset))
                     .ok_or(RuntimeError::OffsetOOB)?
-                    as usize;
+                    .unsigned_abs() as usize;
 
                 *self.get_mem_mut(final_addr)? = self.get_reg(r3)?;
                 None
@@ -297,10 +297,11 @@ impl VirtualMachine {
                 let r1 = self.next_reg(1)?;
                 let offset: i16 = self.next(2)?;
                 let imm_value: u16 = self.next(4)?;
-                let base_addr = self.get_reg(r1)? as i32;
+                let base_addr = i32::from(self.get_reg(r1)?);
                 let final_addr = base_addr
-                    .checked_add(offset as i32)
-                    .ok_or(RuntimeError::OffsetOOB)? as usize;
+                    .checked_add(i32::from(offset))
+                    .ok_or(RuntimeError::OffsetOOB)?
+                    .unsigned_abs() as usize;
                 *self.get_mem_mut(final_addr)? = imm_value;
                 None
             }
@@ -574,16 +575,13 @@ impl VirtualMachine {
             Operation::JZ => jump(self.flags.contains(Flags::Equals))?,
             Operation::JNZ => jump(!self.flags.contains(Flags::Equals))?,
             Operation::JA => jump(self.flags.is_disjoint(Flags::Carry | Flags::Equals))?,
-            Operation::JB => jump(self.flags.contains(Flags::Carry))?,
-            Operation::JAE => jump(!self.flags.contains(Flags::Carry))?,
+            Operation::JB | Operation::JC => jump(self.flags.contains(Flags::Carry))?,
+            Operation::JAE | Operation::JNC => jump(!self.flags.contains(Flags::Carry))?,
             Operation::JBE => jump(!self.flags.is_disjoint(Flags::Carry | Flags::Equals))?,
             Operation::JN => jump(self.flags.contains(Flags::Negative))?,
             Operation::JNN => jump(!self.flags.contains(Flags::Negative))?,
             Operation::JO => jump(self.flags.contains(Flags::Overflow))?,
             Operation::JNO => jump(!self.flags.contains(Flags::Overflow))?,
-            Operation::JC => jump(self.flags.contains(Flags::Carry))?,
-            Operation::JNC => jump(!self.flags.contains(Flags::Carry))?,
-
             Operation::CALL => {
                 let addr_imm = self.next(1)?;
 
@@ -610,35 +608,8 @@ impl VirtualMachine {
             }
 
             Operation::SYSCALL => {
-                let syscallnum = self.get_reg(Register::R1 as usize)?;
-                match syscallnum {
-                    0x01 => {
-                        let print_addr: usize = self.get_reg(Register::R2 as usize)? as usize;
-                        let byte_count: usize = self.get_reg(Register::R3 as usize)? as usize;
-
-                        let limit = print_addr
-                            .checked_add(byte_count)
-                            .ok_or(RuntimeError::MemoryOOB)?;
-
-                        let u16_data: &[u16] = self
-                            .memory
-                            .get(print_addr..limit)
-                            .ok_or(RuntimeError::MemoryOOB)?;
-
-                        let corrected_bytes: Vec<u8> = u16_data
-                            .iter()
-                            .map(|&word| word as u8) // This truncates the u16 to the lower 8 bits
-                            .collect();
-
-                        debug!(
-                            "Printing {byte_count} characters from {byte_count} words starting at addr {print_addr:x}"
-                        );
-                        print!("{}", String::from_utf8_lossy(&corrected_bytes));
-
-                        None
-                    }
-                    _ => return Err(RuntimeError::InvalidSyscall),
-                }
+                self.handle_syscall()?;
+                None
             }
         };
 
@@ -663,19 +634,22 @@ impl VirtualMachine {
         let curr_op = Operation::from_u8(*op_num).ok_or(RuntimeError::InvalidOPCode(*op_num))?;
 
         let arg_type = curr_op.arg_type();
-        let offset = arg_type.to_offset() as u16;
+        let offset = u16::from(arg_type.to_offset());
         self.current_instruction
             .checked_add(offset)
             .ok_or(RuntimeError::InstructionOOB)
     }
 
     pub fn from_bytes(code: Vec<u8>, registers: Vec<u16>) -> Result<Self, ExecutableError> {
-        match code.get(0..4) {
-            Some(b"vmrx") => {}
-            Some(_) => return Err(ExecutableError::InvalidFlag),
-            None => return Err(ExecutableError::InvalidBinary),
+        if let Some(flag) = code.get(0..4) {
+            if flag != b"vmrx" {
+                return Err(ExecutableError::InvalidFlag);
+            }
+        } else {
+            return Err(ExecutableError::InvalidBinary);
         }
-        Ok(VirtualMachine {
+
+        Ok(Self {
             code: code.into_iter().skip(4).collect(),
             flags: FlagSet::<Flags>::empty(),
             memory: vec![0; 0xFFFF],
@@ -683,12 +657,45 @@ impl VirtualMachine {
             registers,
         })
     }
+
+    fn handle_syscall(&self) -> Result<(), RuntimeError> {
+        let syscallnum = self.get_reg(Register::R1 as usize)?;
+        match syscallnum {
+            0x01 => {
+                let print_addr: usize = self.get_reg(Register::R2 as usize)? as usize;
+                let byte_count: usize = self.get_reg(Register::R3 as usize)? as usize;
+
+                let limit = print_addr
+                    .checked_add(byte_count)
+                    .ok_or(RuntimeError::MemoryOOB)?;
+
+                let u16_data: &[u16] = self
+                    .memory
+                    .get(print_addr..limit)
+                    .ok_or(RuntimeError::MemoryOOB)?;
+
+                let corrected_bytes: Vec<u8> = u16_data
+                    .iter()
+                    .map(|&word| (word & 0x00FF) as u8) // This truncates the u16 to the lower 8 bits
+                    .collect();
+
+                debug!(
+                    "Printing {byte_count} characters from {byte_count} words starting at addr {print_addr:x}"
+                );
+                print!("{}", String::from_utf8_lossy(&corrected_bytes));
+
+                Ok(())
+            }
+            _ => Err(RuntimeError::InvalidSyscall),
+        }
+    }
 }
 
 #[derive(Debug)]
 enum ExecutableError {
     InvalidFlag,
     InvalidBinary,
+    RegisterMissing,
 }
 
 #[derive(clap::Parser)]
@@ -698,7 +705,33 @@ struct Args {
     dump: bool,
 }
 
-fn main() -> Result<(), ExecutableError> {
+fn execute(code: Vec<u8>, registers: Vec<u16>) -> Result<(i32, VirtualMachine), ExecutableError> {
+    let mut vm = VirtualMachine::from_bytes(code, registers)?;
+
+    loop {
+        match vm.cycle() {
+            Ok(()) => {}
+            Err(e) => {
+                if matches!(e, RuntimeError::Halted) {
+                    debug!("{vm}");
+                } else {
+                    error!("{vm}");
+                    error!("RUNTIME ERROR: {e:02x?}");
+                }
+                break;
+            }
+        }
+    }
+
+    Ok((
+        vm.get_reg(Register::R0 as usize)
+            .map(i32::from)
+            .map_err(|_err| ExecutableError::RegisterMissing)?,
+        vm,
+    ))
+}
+
+fn main() {
     env_logger::builder()
         .format_timestamp(None)
         .parse_default_env()
@@ -706,81 +739,58 @@ fn main() -> Result<(), ExecutableError> {
 
     let args = Args::parse();
 
-    let code: Vec<u8> = std::fs::read(args.input_file).unwrap();
-    let mut registers: Vec<u16> = Vec::with_capacity(17);
+    let code: Vec<u8> = std::fs::read(args.input_file).expect("Could not open executable");
+    let mut registers: Vec<u16> = vec![0; 17];
 
-    registers.extend(std::iter::repeat_n(0, 17));
+    *registers
+        .get_mut(Register::RSP as usize)
+        .expect("Could not set up RSP") = 0xFFFE;
 
-    *registers.get_mut(Register::RSP as usize).unwrap() = 0xFFFE;
+    let (exit_code, vm) = execute(code, registers).expect("Execution error");
 
-    let mut vm = VirtualMachine::from_bytes(code, registers)?;
-
-    loop {
-        match vm.cycle() {
-            Ok(_) => {}
-            Err(e) => {
-                match e {
-                    RuntimeError::Halted => {
-                        debug!("{vm}");
-                        debug!("CODE: {}", vm.print_code());
-                    }
-                    _ => {
-                        error!("{vm}");
-                        error!("RUNTIME ERROR: {e:02x?}")
-                    }
-                }
-                break;
-            }
-        };
+    if args.dump {
+        create_dump(&vm);
     }
 
-    info!(
-        "Program exited with code {} ({:x})",
-        vm.get_reg(Register::R0 as usize).unwrap(),
-        vm.get_reg(Register::R0 as usize).unwrap()
-    );
+    exit(exit_code)
+}
 
-    // TODO: Modularize this
+fn create_dump(vm: &VirtualMachine) {
     let milisecond = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Time travel")
         .as_millis();
+    if let Err(e) = fs::create_dir_all("./dumps") {
+        error!("Failed to create dumps directory: {e}");
+    } else {
+        let readable_path_str = format!("./dumps/readable_{milisecond}.txt");
+        let bin_path_str = format!("./dumps/raw_{milisecond}.bin");
+        let readable_path = Path::new(&readable_path_str);
+        let bin_path = Path::new(&bin_path_str);
 
-    if args.dump {
-        if let Err(e) = fs::create_dir_all("./dumps") {
-            error!("Failed to create dumps directory: {e}");
-        } else {
-            let readable_path_str = format!("./dumps/readable_{milisecond}.txt");
-            let bin_path_str = format!("./dumps/raw_{milisecond}.bin");
-            let readable_path = Path::new(&readable_path_str);
-            let bin_path = Path::new(&bin_path_str);
+        let try_create = || -> Result<(File, File), std::io::Error> {
+            let f1 = File::create(readable_path)?;
+            let f2 = File::create(bin_path)?;
+            Ok((f1, f2))
+        };
 
-            let try_create = || -> Result<(File, File), std::io::Error> {
-                let f1 = File::create(readable_path)?;
-                let f2 = File::create(bin_path)?;
-                Ok((f1, f2))
-            };
-
-            match try_create() {
-                Ok((readable_file, bin_file)) => {
-                    let mut readable_writer = BufWriter::new(readable_file);
-                    let mut bin_writer = BufWriter::new(bin_file);
-                    vm.dump_mem_bin(&mut bin_writer)
-                        .expect("Could not write binary dump");
-                    vm.dump_mem_readable(&mut readable_writer)
-                        .expect("Could not write binary dump");
-                    info!(
-                        "Memory dumped at {} and {}",
-                        readable_path.display(),
-                        bin_path.display()
-                    );
-                }
-                Err(e) => {
-                    error!("Skipping dump: Could not create files: {e}");
-                }
+        match try_create() {
+            Ok((readable_file, bin_file)) => {
+                let mut readable_writer = BufWriter::new(readable_file);
+                let mut bin_writer = BufWriter::new(bin_file);
+                vm.dump_mem_bin(&mut bin_writer)
+                    .expect("Could not write binary dump");
+                vm.dump_mem_readable(&mut readable_writer)
+                    .expect("Could not write binary dump");
+                info!(
+                    "Memory dumped at {} and {}",
+                    readable_path.display(),
+                    bin_path.display()
+                );
+            }
+            Err(e) => {
+                error!("Skipping dump: Could not create files: {e}");
             }
         }
     }
-
-    exit(vm.get_reg(Register::R0 as usize).unwrap() as i32);
 }

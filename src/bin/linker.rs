@@ -11,7 +11,21 @@ impl Default for Linker {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ObjectLoadError {
+    ParseError(ObjectParseErr),
+    ObjectOverflow,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum LinkError {
+    EntryPointNotFound(String),
+    TotalSizeExceedsLimit(usize),
+    InvalidRelocationOffset { object_name: String, offset: u16 },
+    UndefinedSymbol { symbol: String, object_name: String },
+}
 impl Linker {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             objects: Vec::new(),
@@ -19,20 +33,20 @@ impl Linker {
         }
     }
 
-    pub fn load_object(&mut self, name: &str, data: &[u8]) {
+    /// # Errors
+    ///
+    /// On invalid object
+    pub fn load_object(&mut self, name: &str, data: &[u8]) -> Result<(), ObjectLoadError> {
         let header_overhead = 3;
 
-        let current_code_size: u16 = self
-            .objects
-            .iter()
-            .map(|obj| obj.bytecode.len() as u16)
-            .sum();
+        let current_code_size: u16 = self.objects.iter().map(|obj| obj.bytecode.len()).sum();
 
         let base_address = header_overhead + current_code_size;
 
-        let object = ObjectFile::from_binary(data, name, base_address);
+        let object = ObjectFile::from_binary(data, name, base_address)
+            .map_err(ObjectLoadError::ParseError)?;
 
-        for (label, offset) in object.exports.iter() {
+        for (label, offset) in &object.exports {
             if self.global_symbols.contains_key(label) {
                 warn!("WARNING Label {label} is redefined by {name}");
             }
@@ -42,60 +56,93 @@ impl Linker {
         }
 
         self.objects.push(object);
+        Ok(())
     }
 
-    pub fn link(mut self, entry_label: &str) -> Result<Vec<u8>, String> {
+    /// # Errors
+    ///
+    /// When incorrect format
+    pub fn link(mut self, entry_label: &str) -> Result<Vec<u8>, LinkError> {
         let mut final_bytecode = Vec::new();
 
         let entry_addr = self
             .global_symbols
             .get(entry_label)
-            .cloned()
-            .ok_or(format!(
-                "Linker Error: Entry point '{}' not found",
-                entry_label
-            ))?;
+            .copied()
+            .ok_or_else(|| LinkError::EntryPointNotFound(entry_label.to_string()))?;
 
         let mut header = vec![Operation::JMP as u8];
         header.extend_from_slice(&entry_addr.to_be_bytes());
 
-        let total_size: usize = self.objects.iter().map(|o| o.bytecode.len()).sum();
+        let total_size: usize = self.objects.iter().map(|o| o.bytecode.len()).sum::<u16>() as usize;
         if total_size > 0xFFFF {
-            return Err(format!(
-                "Linker Error: Total size {} exceeds 64KB limit",
-                total_size
-            ));
+            return Err(LinkError::TotalSizeExceedsLimit(total_size));
         }
 
         for obj in &mut self.objects {
             for reloc_offset in &obj.internal_relocations {
-                let idx = *reloc_offset as usize;
+                let idx = *reloc_offset;
 
-                let existing_addend =
-                    u16::from_be_bytes([obj.bytecode[idx], obj.bytecode[idx + 1]]);
+                let b0 =
+                    *obj.bytecode
+                        .get(idx)
+                        .ok_or_else(|| LinkError::InvalidRelocationOffset {
+                            object_name: obj.name.clone(),
+                            offset: *reloc_offset,
+                        })?;
+                let b1 = *obj.bytecode.get(idx + 1).ok_or_else(|| {
+                    LinkError::InvalidRelocationOffset {
+                        object_name: obj.name.clone(),
+                        offset: *reloc_offset + 1,
+                    }
+                })?;
 
+                let existing_addend = u16::from_be_bytes([b0, b1]);
                 let final_addr = existing_addend + obj.base_address;
 
                 debug!("Patched local relocation: {existing_addend:04x} -> {final_addr:04x}");
 
                 let patched_bytes = final_addr.to_be_bytes();
-                obj.bytecode[idx] = patched_bytes[0];
-                obj.bytecode[idx + 1] = patched_bytes[1];
+                *obj.bytecode
+                    .get_mut(idx)
+                    .ok_or_else(|| LinkError::InvalidRelocationOffset {
+                        object_name: obj.name.clone(),
+                        offset: *reloc_offset,
+                    })? = patched_bytes[0];
+                *obj.bytecode.get_mut(idx + 1).ok_or_else(|| {
+                    LinkError::InvalidRelocationOffset {
+                        object_name: obj.name.clone(),
+                        offset: *reloc_offset + 1,
+                    }
+                })? = patched_bytes[1];
             }
 
             for (label, reloc_offset) in &obj.external_relocations {
-                let idx = *reloc_offset as usize;
+                let label_str = label.as_str();
+                let idx = *reloc_offset;
 
-                let final_addr = *self.global_symbols.get(label).ok_or(format!(
-                    "Linker Error: Undefined symbol '{}' in {}",
-                    label, obj.name
-                ))?;
+                let final_addr = *self.global_symbols.get(label_str).ok_or_else(|| {
+                    LinkError::UndefinedSymbol {
+                        symbol: label.clone(),
+                        object_name: obj.name.clone(),
+                    }
+                })?;
 
                 let patched_bytes = final_addr.to_be_bytes();
 
                 debug!("Patched external relocation: {final_addr:04x}");
-                obj.bytecode[idx] = patched_bytes[0];
-                obj.bytecode[idx + 1] = patched_bytes[1];
+                *obj.bytecode
+                    .get_mut(idx)
+                    .ok_or_else(|| LinkError::InvalidRelocationOffset {
+                        object_name: obj.name.clone(),
+                        offset: *reloc_offset,
+                    })? = patched_bytes[0];
+                *obj.bytecode.get_mut(idx + 1).ok_or_else(|| {
+                    LinkError::InvalidRelocationOffset {
+                        object_name: obj.name.clone(),
+                        offset: *reloc_offset + 1,
+                    }
+                })? = patched_bytes[1];
             }
         }
 
@@ -112,7 +159,7 @@ impl Linker {
 }
 
 use clap::Parser;
-use libvmr::{ObjectFile, Operation};
+use libvmr::{ObjectFile, ObjectParseErr, Operation};
 use log::{debug, error, info, warn};
 use std::fs;
 use std::path::PathBuf;
@@ -140,11 +187,13 @@ fn main() {
         let name = path.to_string_lossy().to_string();
         match fs::read(&path) {
             Ok(data) => {
-                info!("Loading {}...", name);
-                linker.load_object(&name, &data);
+                info!("Loading {name}...");
+                linker
+                    .load_object(&name, &data)
+                    .expect("Could not load object");
             }
             Err(e) => {
-                error!("Error reading {}: {}", name, e);
+                error!("Error reading {name}: {e}");
                 std::process::exit(1);
             }
         }
@@ -165,13 +214,13 @@ fn main() {
             }
 
             if let Err(e) = fs::write(&args.output, binary) {
-                error!("Error writing output: {}", e);
+                error!("Error writing output: {e}");
             } else {
                 info!("Successfully linked to {}", args.output.display());
             }
         }
         Err(e) => {
-            error!("{}", e);
+            error!("{e:?}");
             std::process::exit(1);
         }
     }

@@ -1,6 +1,154 @@
 use flagset::flags;
+use std::slice::IterMut;
 use std::{collections::HashMap, fmt::Display};
 use strum::EnumString;
+
+use std::fmt::Debug;
+
+/// A vector wrapper indexed by `u16`.
+#[derive(Debug, Clone)]
+pub struct IndexedVec<T> {
+    data: Vec<T>,
+}
+
+#[derive(Debug)]
+pub struct IndexedVecErr;
+
+impl<T: 'static> IndexedVec<T> {
+    /// Creates a new, empty `IndexedVec`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    /// Creates a new `IndexedVec` with the specified capacity `u16`.
+    #[must_use]
+    pub fn with_capacity(capacity: u16) -> Self {
+        let cap_usize = capacity as usize;
+
+        Self {
+            data: Vec::with_capacity(cap_usize),
+        }
+    }
+
+    /// Returns the number of elements in the vector as a `u16`.
+    ///
+    /// # Panics
+    /// When length is bigger than `u16::MAX`
+    #[must_use]
+    pub fn len(&self) -> u16 {
+        self.data
+            .len()
+            .try_into()
+            .expect("Length exceeded u16::MAX limit")
+    }
+
+    /// Returns `true` if the vector contains no elements.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Appends an element to the back of the collection.
+    ///
+    /// # Errors
+    /// if `T` is `u16` and the limit (`u16::MAX - 1`) is exceeded.
+    pub fn push(&mut self, value: T) -> Result<(), IndexedVecErr> {
+        let target_len = self.data.len().checked_add(1).ok_or(IndexedVecErr)?;
+
+        Self::assert_u16_bounds(target_len)?;
+        self.data.push(value);
+        Ok(())
+    }
+
+    /// Returns an iterator over the values.
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.data.iter()
+    }
+
+    /// Returns a mutable iterator over the values.
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+        self.data.iter_mut()
+    }
+
+    /// Returns the value at `index`
+    #[must_use]
+    pub fn get(&self, index: u16) -> Option<&T> {
+        self.data.get(index as usize)
+    }
+
+    pub fn get_mut(&mut self, index: u16) -> Option<&mut T> {
+        self.data.get_mut(index as usize)
+    }
+
+    /// # Errors
+    ///
+    /// When extending would overflow
+    pub fn extend_from_slice(&mut self, slice: &[T]) -> Result<(), IndexedVecErr>
+    where
+        T: Clone,
+    {
+        Self::assert_u16_bounds(self.len() as usize + slice.len())?;
+        self.data.extend_from_slice(slice);
+        Ok(())
+    }
+
+    /// Helper to enforce the inner Vec limit when `T = u16`: maximum allowed size is `u16::MAX - 1`.
+    const fn assert_u16_bounds(target_len: usize) -> Result<(), IndexedVecErr> {
+        let max_allowed = (u16::MAX - 1) as usize;
+        if target_len <= max_allowed {
+            return Err(IndexedVecErr);
+        }
+        Ok(())
+    }
+}
+
+impl<T: 'static> Default for IndexedVec<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// IntoIterator implementation for owned iterations
+impl<T> IntoIterator for IndexedVec<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.into_iter()
+    }
+}
+
+// Enables: for item in &indexed_vec
+impl<'a, T> IntoIterator for &'a IndexedVec<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.iter()
+    }
+}
+
+// Enables: for item in &mut indexed_vec
+impl<'a, T> IntoIterator for &'a mut IndexedVec<T> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.iter_mut()
+    }
+}
+
+impl<T> TryFrom<Vec<T>> for IndexedVec<T> {
+    type Error = ();
+
+    fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
+        if value.len() < u16::MAX.into() {
+            return Err(());
+        }
+        Ok(Self { data: value })
+    }
+}
 
 #[macro_use]
 extern crate num_derive;
@@ -31,8 +179,7 @@ pub type Immediate = u16;
 pub type Offset = i16;
 
 #[repr(u8)]
-#[allow(non_camel_case_types)]
-#[allow(dead_code)]
+#[allow(non_camel_case_types, reason = "Opcodes are uppercase")]
 #[derive(EnumString, Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
 pub enum Operation {
     // Misc [0]
@@ -117,80 +264,72 @@ pub enum Operation {
 }
 
 impl Operation {
-    #[allow(dead_code)]
-    pub fn arg_type(&self) -> Arguments {
+    #[must_use]
+    pub const fn arg_type(&self) -> Arguments {
         match self {
             // Misc: 0 Operands
-            Operation::HALT | Operation::NOP | Operation::RET | Operation::SYSCALL => {
-                Arguments::None
-            }
+            Self::HALT | Self::NOP | Self::RET | Self::SYSCALL => Arguments::None,
 
             // Single Operand: Register or Immediate
-            Operation::DIV_MOD
-            | Operation::PUSH
-            | Operation::PUSH_M
-            | Operation::POP
-            | Operation::POP_M => Arguments::Reg,
+            Self::DIV_MOD | Self::PUSH | Self::PUSH_M | Self::POP | Self::POP_M => Arguments::Reg,
 
-            Operation::PUSH_IMM
-            | Operation::POP_IMM
-            | Operation::JMP
-            | Operation::JZ
-            | Operation::JNZ
-            | Operation::JA
-            | Operation::JB
-            | Operation::JAE
-            | Operation::JBE
-            | Operation::JN
-            | Operation::JNN
-            | Operation::JO
-            | Operation::JNO
-            | Operation::JC
-            | Operation::JNC
-            | Operation::CALL => Arguments::Imm,
+            Self::PUSH_IMM
+            | Self::POP_IMM
+            | Self::JMP
+            | Self::JZ
+            | Self::JNZ
+            | Self::JA
+            | Self::JB
+            | Self::JAE
+            | Self::JBE
+            | Self::JN
+            | Self::JNN
+            | Self::JO
+            | Self::JNO
+            | Self::JC
+            | Self::JNC
+            | Self::CALL => Arguments::Imm,
 
             // Two Operands: Register, Register
-            Operation::MOV
-            | Operation::LOAD
-            | Operation::STORE_R_R
-            | Operation::ADD
-            | Operation::SUB
-            | Operation::AND
-            | Operation::OR
-            | Operation::XOR
-            | Operation::SHL
-            | Operation::SHR
-            | Operation::CMP => Arguments::RegReg,
+            Self::MOV
+            | Self::LOAD
+            | Self::STORE_R_R
+            | Self::ADD
+            | Self::SUB
+            | Self::AND
+            | Self::OR
+            | Self::XOR
+            | Self::SHL
+            | Self::SHR
+            | Self::CMP => Arguments::RegReg,
 
             // Two Operands: Register, Immediate
-            Operation::MOV_IMM
-            | Operation::STORE_R_IMM
-            | Operation::ADD_IMM
-            | Operation::SUB_IMM
-            | Operation::AND_IMM
-            | Operation::OR_IMM
-            | Operation::XOR_IMM
-            | Operation::SHL_IMM
-            | Operation::SHR_IMM
-            | Operation::CMP_IMM => Arguments::RegImm,
+            Self::MOV_IMM
+            | Self::STORE_R_IMM
+            | Self::ADD_IMM
+            | Self::SUB_IMM
+            | Self::AND_IMM
+            | Self::OR_IMM
+            | Self::XOR_IMM
+            | Self::SHL_IMM
+            | Self::SHR_IMM
+            | Self::CMP_IMM => Arguments::RegImm,
 
             // Two Operands: Immediate, Register
-            Operation::LOAD_IMM | Operation::STORE_IMM_R => Arguments::ImmReg,
+            Self::LOAD_IMM | Self::STORE_IMM_R => Arguments::ImmReg,
 
             // Two Operands: Immediate, Immediate
-            Operation::STORE_IMM_IMM => Arguments::ImmImm,
+            Self::STORE_IMM_IMM => Arguments::ImmImm,
 
             // Three Operands: Register, Immediate, Register (Relative Addressing)
-            Operation::LOAD_REL | Operation::STORE_REL_R => Arguments::RegImmReg,
+            Self::LOAD_REL | Self::STORE_REL_R => Arguments::RegImmReg,
 
-            Operation::STORE_REL_IMM => Arguments::RegImmImm,
+            Self::STORE_REL_IMM => Arguments::RegImmImm,
         }
     }
 }
 
 #[repr(u8)]
-#[allow(non_camel_case_types)]
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arguments {
     None = 0x00,
@@ -205,17 +344,15 @@ pub enum Arguments {
 }
 
 impl Arguments {
-    pub fn to_offset(&self) -> u8 {
+    #[must_use]
+    pub const fn to_offset(&self) -> u8 {
         match self {
-            Arguments::None => 1,
-            Arguments::Reg => 2,
-            Arguments::Imm => 3,
-            Arguments::RegReg => 3,
-            Arguments::RegImm => 4,
-            Arguments::ImmImm => 5,
-            Arguments::RegImmReg => 5,
-            Arguments::ImmReg => 4,
-            Arguments::RegImmImm => 6,
+            Self::None => 1,
+            Self::Reg => 2,
+            Self::Imm | Self::RegReg => 3,
+            Self::RegImm | Self::ImmReg => 4,
+            Self::ImmImm | Self::RegImmReg => 5,
+            Self::RegImmImm => 6,
         }
     }
 }
@@ -232,98 +369,142 @@ flags! {
 #[derive(Debug)]
 pub struct ObjectFile {
     pub name: String,
-    pub internal_relocations: Vec<u16>,
-    pub external_relocations: Vec<(String, u16)>,
+    pub internal_relocations: IndexedVec<u16>,
+    pub external_relocations: IndexedVec<(String, u16)>,
     pub labels: HashMap<String, u16>,
-    pub exports: Vec<(String, u16)>,
-    pub bytecode: Vec<u8>,
+    pub exports: IndexedVec<(String, u16)>,
+    pub bytecode: IndexedVec<u8>,
     pub base_address: u16,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ObjectParseErr {
+    InvalidMagic,
+    UnexpectedEof,
+    StringParseError,
+    ExportsOverflow,
+    ExternalRelocationsOverflow,
+    InternalRelocationsOverflow,
+    BytecodeTooLarge,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum StringParseError {
+    UTF8Error(std::str::Utf8Error),
+    BadData,
+}
+
 impl ObjectFile {
+    #[must_use]
     pub fn new(name: String) -> Self {
         Self {
             name,
-            internal_relocations: Vec::new(),
-            external_relocations: Vec::new(),
-            exports: Vec::new(),
+            internal_relocations: IndexedVec::new(),
+            external_relocations: IndexedVec::new(),
+            exports: IndexedVec::new(),
             labels: HashMap::new(),
-            bytecode: Vec::new(),
+            bytecode: IndexedVec::new(),
             base_address: 0,
         }
     }
 
+    #[must_use]
     pub fn to_binary(&self) -> Vec<u8> {
         let mut out = Vec::new();
 
         out.extend_from_slice(b"vmro");
 
-        out.extend_from_slice(&(self.exports.len() as u16).to_be_bytes());
+        out.extend_from_slice(&self.exports.len().to_be_bytes());
 
         for (name, offset) in &self.exports {
             Self::write_string(&mut out, name);
             out.extend_from_slice(&offset.to_be_bytes());
         }
 
-        out.extend_from_slice(&(self.external_relocations.len() as u16).to_be_bytes());
+        out.extend_from_slice(&self.external_relocations.len().to_be_bytes());
         for (label, address) in &self.external_relocations {
             Self::write_string(&mut out, label);
             out.extend_from_slice(&address.to_be_bytes());
         }
 
-        out.extend_from_slice(&(self.internal_relocations.len() as u16).to_be_bytes());
+        out.extend_from_slice(&self.internal_relocations.len().to_be_bytes());
         for address in &self.internal_relocations {
             out.extend_from_slice(&address.to_be_bytes());
         }
 
-        out.extend_from_slice(&self.bytecode);
+        out.extend_from_slice(&self.bytecode.data[..]);
 
         out
     }
 
-    pub fn from_binary(data: &[u8], name: &str, base_address: u16) -> Self {
-        let mut cursor = 4; // Skip "vmro"
+    /// Parse object file
+    ///
+    /// # Errors
+    ///
+    /// With incorrect format
+    pub fn from_binary(data: &[u8], name: &str, base_address: u16) -> Result<Self, ObjectParseErr> {
+        if data.get(0..4) != Some(b"vmro") {
+            return Err(ObjectParseErr::InvalidMagic);
+        }
+        let mut cursor = 4;
 
-        // Parse Exports
-        let export_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-        let mut exports = Vec::with_capacity(export_count as usize);
-        cursor += 2;
+        let read_u16 = |data: &[u8], cursor: &mut usize| -> Result<u16, ObjectParseErr> {
+            let bytes = data
+                .get(*cursor..*cursor + 2)
+                .ok_or(ObjectParseErr::UnexpectedEof)?;
+            *cursor += 2;
+            Ok(u16::from_be_bytes([
+                *bytes.first().ok_or(ObjectParseErr::UnexpectedEof)?,
+                *bytes.get(1).ok_or(ObjectParseErr::UnexpectedEof)?,
+            ]))
+        };
+
+        let export_count = read_u16(data, &mut cursor)?;
+        let mut exports = IndexedVec::with_capacity(export_count);
         for _ in 0..export_count {
-            let (label, bytes_read) = Self::read_string(&data[cursor..]);
+            let slice = data.get(cursor..).ok_or(ObjectParseErr::UnexpectedEof)?;
+            let (label, bytes_read) =
+                Self::read_string(slice).map_err(|_err| ObjectParseErr::StringParseError)?;
             cursor += bytes_read;
-            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-            cursor += 2;
 
-            exports.push((label.clone(), offset));
+            let offset = read_u16(data, &mut cursor)?;
+            exports
+                .push((label.clone(), offset))
+                .map_err(|_err| ObjectParseErr::ExportsOverflow)?;
         }
 
-        // External Relocations
-        let external_relocation_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-        let mut external_relocations = Vec::with_capacity(external_relocation_count as usize);
-        cursor += 2;
+        let external_relocation_count = read_u16(data, &mut cursor)?;
+        let mut external_relocations = IndexedVec::with_capacity(external_relocation_count);
         for _ in 0..external_relocation_count {
-            let (label, bytes_read) = Self::read_string(&data[cursor..]);
+            let slice = data.get(cursor..).ok_or(ObjectParseErr::UnexpectedEof)?;
+            let (label, bytes_read) =
+                Self::read_string(slice).map_err(|_err| ObjectParseErr::StringParseError)?;
             cursor += bytes_read;
-            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-            cursor += 2;
 
-            external_relocations.push((label.clone(), offset));
+            let offset = read_u16(data, &mut cursor)?;
+            external_relocations
+                .push((label.clone(), offset))
+                .map_err(|_err| ObjectParseErr::ExternalRelocationsOverflow)?;
         }
 
-        // Local Relocations
-        let internal_relocation_count = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-        cursor += 2;
-        let mut internal_relocations: Vec<u16> =
-            Vec::with_capacity(internal_relocation_count as usize);
+        let internal_relocation_count = read_u16(data, &mut cursor)?;
+        let mut internal_relocations = IndexedVec::with_capacity(internal_relocation_count);
         for _ in 0..internal_relocation_count {
-            let offset = u16::from_be_bytes([data[cursor], data[cursor + 1]]);
-            cursor += 2;
-            internal_relocations.push(offset);
+            let offset = read_u16(data, &mut cursor)?;
+            internal_relocations
+                .push(offset)
+                .map_err(|_err| ObjectParseErr::InternalRelocationsOverflow)?;
         }
 
-        let bytecode = data[cursor..].to_vec();
+        let bytecode_vec = data
+            .get(cursor..)
+            .ok_or(ObjectParseErr::UnexpectedEof)?
+            .to_vec();
+        let bytecode = bytecode_vec
+            .try_into()
+            .map_err(|_err| ObjectParseErr::BytecodeTooLarge)?;
 
-        ObjectFile {
+        Ok(Self {
             name: name.to_string(),
             exports,
             labels: HashMap::new(),
@@ -331,17 +512,26 @@ impl ObjectFile {
             internal_relocations,
             external_relocations,
             base_address,
-        }
+        })
     }
 
     fn write_string(buffer: &mut Vec<u8>, s: &str) {
-        buffer.extend_from_slice(&(s.len() as u16).to_be_bytes());
+        buffer.extend_from_slice(
+            &u16::try_from(s.len())
+                .expect("String too long")
+                .to_be_bytes(),
+        );
         buffer.extend_from_slice(s.as_bytes());
     }
-    fn read_string(data: &[u8]) -> (String, usize) {
-        let len = u16::from_be_bytes([data[0], data[1]]) as usize;
-        let s = String::from_utf8_lossy(&data[2..2 + len]).to_string();
-        (s, len + 2)
+    fn read_string(data: &[u8]) -> Result<(String, usize), StringParseError> {
+        let len = u16::from_be_bytes([
+            *data.first().expect("Could not get string length"),
+            *data.get(1).expect("Could not get string length"),
+        ]) as usize;
+        let raw = data.get(2..2 + len).ok_or(StringParseError::BadData)?;
+        let s = String::from_utf8(raw.to_vec())
+            .map_err(|e| StringParseError::UTF8Error(e.utf8_error()))?;
+        Ok((s, len + 2))
     }
 }
 
