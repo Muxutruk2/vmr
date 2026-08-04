@@ -6,12 +6,8 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-pub struct Assembler {}
-
-impl Default for Assembler {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct Assembler {
+    objfile: ObjectFile,
 }
 
 fn scan_labels(lines: &[&str], objfile: &mut ObjectFile) {
@@ -66,40 +62,41 @@ pub enum AssembleError {
     UnknownOpcode { line: usize, opcode: String },
     MissingArgument { line: usize, index: usize },
     BytecodeTooLarge,
-    ParseError(String),
+    ParseError(ParseError),
     ResolveError(ResolveError),
 }
 
-impl From<String> for AssembleError {
-    fn from(err: String) -> Self {
-        Self::ParseError(err)
-    }
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseError {
+    InvalidRegister,
 }
+
 impl From<IndexedVecErr> for AssembleError {
     fn from(_: IndexedVecErr) -> Self {
         Self::BytecodeTooLarge
     }
 }
-fn parse_reg(s: &str) -> Result<Register, String> {
+
+fn parse_reg(s: &str) -> Option<Register> {
     match s.to_uppercase().as_str() {
-        "R0" => Ok(Register::R0),
-        "R1" => Ok(Register::R1),
-        "R2" => Ok(Register::R2),
-        "R3" => Ok(Register::R3),
-        "R4" => Ok(Register::R4),
-        "R5" => Ok(Register::R5),
-        "R6" => Ok(Register::R6),
-        "R7" => Ok(Register::R7),
-        "R8" => Ok(Register::R8),
-        "R9" => Ok(Register::R9),
-        "R10" => Ok(Register::R10),
-        "R11" => Ok(Register::R11),
-        "R12" => Ok(Register::R12),
-        "R13" => Ok(Register::R13),
-        "R14" => Ok(Register::R14),
-        "R15" => Ok(Register::R15),
-        "RSP" => Ok(Register::RSP),
-        _ => Err(format!("Invalid register: {s}")),
+        "R0" => Some(Register::R0),
+        "R1" => Some(Register::R1),
+        "R2" => Some(Register::R2),
+        "R3" => Some(Register::R3),
+        "R4" => Some(Register::R4),
+        "R5" => Some(Register::R5),
+        "R6" => Some(Register::R6),
+        "R7" => Some(Register::R7),
+        "R8" => Some(Register::R8),
+        "R9" => Some(Register::R9),
+        "R10" => Some(Register::R10),
+        "R11" => Some(Register::R11),
+        "R12" => Some(Register::R12),
+        "R13" => Some(Register::R13),
+        "R14" => Some(Register::R14),
+        "R15" => Some(Register::R15),
+        "RSP" => Some(Register::RSP),
+        _ => None,
     }
 }
 
@@ -122,21 +119,66 @@ impl From<ResolveError> for AssembleError {
     }
 }
 
+fn get_part<'a>(parts: &[&'a str], idx: usize, line_num: usize) -> Result<&'a str, AssembleError> {
+    parts
+        .get(idx)
+        .copied()
+        .ok_or(AssembleError::MissingArgument {
+            line: line_num + 1,
+            index: idx,
+        })
+}
+
 impl Assembler {
     #[must_use]
-    pub const fn new() -> Self {
-        Self {}
+    pub fn new(name: &str) -> Self {
+        Self {
+            objfile: ObjectFile::new(name.to_string()),
+        }
+    }
+
+    #[must_use]
+    pub const fn get_object(&self) -> &ObjectFile {
+        &self.objfile
+    }
+
+    fn push_reg(
+        &mut self,
+        parts: &[&str],
+        idx: usize,
+        line_num: usize,
+    ) -> Result<(), AssembleError> {
+        self.objfile.bytecode.push(
+            parse_reg(get_part(parts, idx, line_num)?)
+                .ok_or(AssembleError::ParseError(ParseError::InvalidRegister))? as u8,
+        )?;
+        Ok(())
+    }
+
+    /// Resolves an immediate operand at `parts[idx]` and pushes its big-endian `u16` bytes.
+    fn push_imm(
+        &mut self,
+        parts: &[&str],
+        idx: usize,
+        line_num: usize,
+    ) -> Result<(), AssembleError> {
+        let imm_pos = self.objfile.bytecode.len();
+
+        let raw_val = get_part(parts, idx, line_num)?;
+        let val = Self::resolve_value(&mut self.objfile, raw_val, imm_pos)?;
+        self.objfile
+            .bytecode
+            .extend_from_slice(&val.to_be_bytes())?;
+        Ok(())
     }
 
     /// # Errors
     ///
     /// When incorrect format
-    pub fn assemble(&mut self, input: &str, name: &str) -> Result<ObjectFile, AssembleError> {
-        let mut objfile = ObjectFile::new(name.to_string());
-
+    pub fn assemble(&mut self, input: &str) -> Result<(), AssembleError> {
         let lines: Vec<&str> = input.lines().collect();
 
-        scan_labels(&lines, &mut objfile);
+        scan_labels(&lines, &mut self.objfile);
 
         for (line_num, line) in lines.iter().enumerate() {
             let line = line.trim();
@@ -144,83 +186,64 @@ impl Assembler {
                 continue;
             }
 
-            let parts: Vec<&str> = line.split([' ', ',']).filter(|s| !s.is_empty()).collect();
+            self.assemble_line(line, line_num)?;
+        }
 
-            let raw_op = parts
-                .first()
-                .ok_or(AssembleError::MissingOpcode { line: line_num + 1 })?;
+        Ok(())
+    }
 
-            let op = Operation::from_str(raw_op).map_err(|_err| AssembleError::UnknownOpcode {
-                line: line_num + 1,
-                opcode: (*raw_op).to_string(),
-            })?;
+    /// Parses and emits bytecode for a single instruction line.
+    fn assemble_line(&mut self, line: &str, line_num: usize) -> Result<(), AssembleError> {
+        let parts: Vec<&str> = line.split([' ', ',']).filter(|s| !s.is_empty()).collect();
 
-            objfile.bytecode.push(op as u8)?;
+        let raw_op = parts
+            .first()
+            .ok_or(AssembleError::MissingOpcode { line: line_num + 1 })?;
 
-            let get_part = |idx: usize| -> Result<&str, AssembleError> {
-                parts
-                    .get(idx)
-                    .copied()
-                    .ok_or(AssembleError::MissingArgument {
-                        line: line_num + 1,
-                        index: idx,
-                    })
-            };
+        let op = Operation::from_str(raw_op).map_err(|_err| AssembleError::UnknownOpcode {
+            line: line_num + 1,
+            opcode: (*raw_op).to_string(),
+        })?;
 
-            match op.arg_type() {
-                Arguments::Reg => {
-                    objfile.bytecode.push(parse_reg(get_part(1)?)? as u8)?;
-                }
-                Arguments::RegReg => {
-                    objfile.bytecode.push(parse_reg(get_part(1)?)? as u8)?;
-                    objfile.bytecode.push(parse_reg(get_part(2)?)? as u8)?;
-                }
-                Arguments::RegImm => {
-                    let imm_pos2 = objfile.bytecode.len() + 1;
-                    objfile.bytecode.push(parse_reg(get_part(1)?)? as u8)?;
-                    let imm = Self::resolve_value(&mut objfile, get_part(2)?, imm_pos2)?;
-                    objfile.bytecode.extend_from_slice(&imm.to_be_bytes())?;
-                }
-                Arguments::Imm => {
-                    let imm_pos = objfile.bytecode.len();
-                    let imm = Self::resolve_value(&mut objfile, get_part(1)?, imm_pos)?;
-                    objfile.bytecode.extend_from_slice(&imm.to_be_bytes())?;
-                }
-                Arguments::None => {}
-                Arguments::ImmImm => {
-                    let imm_pos1 = objfile.bytecode.len();
-                    let imm_pos2 = objfile.bytecode.len() + 1;
-                    let imm1 = Self::resolve_value(&mut objfile, get_part(1)?, imm_pos1)?;
-                    let imm2 = Self::resolve_value(&mut objfile, get_part(2)?, imm_pos2)?;
-                    objfile.bytecode.extend_from_slice(&imm1.to_be_bytes())?;
-                    objfile.bytecode.extend_from_slice(&imm2.to_be_bytes())?;
-                }
-                Arguments::RegImmReg => {
-                    objfile.bytecode.push(parse_reg(get_part(1)?)? as u8)?;
-                    let imm_pos1 = objfile.bytecode.len();
-                    let imm1 = Self::resolve_value(&mut objfile, get_part(2)?, imm_pos1)?;
-                    objfile.bytecode.extend_from_slice(&imm1.to_be_bytes())?;
-                    objfile.bytecode.push(parse_reg(get_part(3)?)? as u8)?;
-                }
-                Arguments::ImmReg => {
-                    let imm_pos1 = objfile.bytecode.len();
-                    let imm = Self::resolve_value(&mut objfile, get_part(1)?, imm_pos1)?;
-                    objfile.bytecode.extend_from_slice(&imm.to_be_bytes())?;
-                    objfile.bytecode.push(parse_reg(get_part(2)?)? as u8)?;
-                }
-                Arguments::RegImmImm => {
-                    objfile.bytecode.push(parse_reg(get_part(1)?)? as u8)?;
-                    let imm_pos1 = objfile.bytecode.len();
-                    let imm1 = Self::resolve_value(&mut objfile, get_part(2)?, imm_pos1)?;
-                    objfile.bytecode.extend_from_slice(&imm1.to_be_bytes())?;
-                    let imm_pos2 = objfile.bytecode.len();
-                    let imm2 = Self::resolve_value(&mut objfile, get_part(3)?, imm_pos2)?;
-                    objfile.bytecode.extend_from_slice(&imm2.to_be_bytes())?;
-                }
+        self.objfile.bytecode.push(op as u8)?;
+
+        match op.arg_type() {
+            Arguments::None => {}
+            Arguments::Reg => {
+                self.push_reg(&parts, 1, line_num)?;
+            }
+            Arguments::RegReg => {
+                self.push_reg(&parts, 1, line_num)?;
+                self.push_reg(&parts, 2, line_num)?;
+            }
+            Arguments::RegImm => {
+                self.push_reg(&parts, 1, line_num)?;
+                self.push_imm(&parts, 2, line_num)?;
+            }
+            Arguments::Imm => {
+                self.push_imm(&parts, 1, line_num)?;
+            }
+            Arguments::ImmImm => {
+                self.push_imm(&parts, 1, line_num)?;
+                self.push_imm(&parts, 2, line_num)?;
+            }
+            Arguments::RegImmReg => {
+                self.push_reg(&parts, 1, line_num)?;
+                self.push_imm(&parts, 2, line_num)?;
+                self.push_reg(&parts, 3, line_num)?;
+            }
+            Arguments::ImmReg => {
+                self.push_imm(&parts, 1, line_num)?;
+                self.push_reg(&parts, 2, line_num)?;
+            }
+            Arguments::RegImmImm => {
+                self.push_reg(&parts, 1, line_num)?;
+                self.push_imm(&parts, 2, line_num)?;
+                self.push_imm(&parts, 3, line_num)?;
             }
         }
 
-        Ok(objfile)
+        Ok(())
     }
 
     fn resolve_value(objfile: &mut ObjectFile, s: &str, imm_pos: u16) -> Result<u16, ResolveError> {
@@ -279,16 +302,17 @@ fn main() {
         info!("Assembling {}...", args.input.display());
     }
 
-    let mut assembler = Assembler::new();
+    let name = args
+        .input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .expect("Invalid filename");
 
-    match assembler.assemble(
-        &input_content,
-        args.input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .expect("Invalid filename"),
-    ) {
-        Ok(objfile) => {
+    let mut assembler = Assembler::new(name);
+
+    match assembler.assemble(&input_content) {
+        Ok(()) => {
+            let objfile = assembler.get_object();
             debug!("ObjectFile: {objfile}");
             if let Err(e) = fs::write(&args.output, objfile.to_binary()) {
                 error!(
